@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Supabase temporary files
+supabase/.temp/
+supabase/.branches/
+
+# macOS
+.DS_Store
+
+# Logs and backups
+*.log
+*.dump
+*Backups/

@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "CarpoolBoard",
+    "slug": "CarpoolBoard",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.smuc3mobilefall26.CarpoolBoard"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0e5d81b8-c9ef-4e3a-873f-83c78eb6d72c"
+      }
+    },
+    "owner": "smu-c3-mobile-fall-26",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0e5d81b8-c9ef-4e3a-873f-83c78eb6d72c"
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker",
+      "@react-native-vector-icons/ionicons",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CarpoolBoard uses your photo library so you can choose a profile picture.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "CarpoolBoard uses your location only to suggest the nearest SMU pickup landmark. Your location is not saved or shared.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false
+        }
+      ],
+      "expo-status-bar",
+      "expo-secure-store"
+    ]
+  }
+}
