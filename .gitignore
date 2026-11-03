@@ -6,19 +6,21 @@ node_modules/
 dist/
 web-build/
 
-# Environment files
+# Environment variables
 .env
 .env.*
 !.env.example
 
-# Supabase temporary files
+# Supabase local files
 supabase/.temp/
 supabase/.branches/
 
 # macOS
 .DS_Store
 
-# Logs and backups
+# Logs
 *.log
-*.dump
+
+# Local backups
 *Backups/
+*.dump

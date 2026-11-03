@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Keyboard, Linking, Platform, Pressable, Text, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@react-native-vector-icons/ionicons';
@@ -79,11 +79,21 @@ export default function RideForm({
   });
 
   // "Use My Location": whether a lookup is running, and the message about
-  // its outcome ({ tone, message, showSettings } or null). A manual pick
-  // bumps locateRequest so a lookup still in flight can't overwrite it.
+  // its outcome ({ tone, message, canRetry, settings } or null, where settings
+  // is 'app', 'device' or unset). A manual pick, saving, or leaving the form
+  // bumps locateRequest so a lookup still in flight can't overwrite anything.
   const [isLocating, setIsLocating] = useState(false);
   const [locationNotice, setLocationNotice] = useState(null);
   const locateRequest = useRef(0);
+
+  // The form's values live in App.js, so a lookup that outlives this screen
+  // could otherwise write into whichever ride is opened next.
+  useEffect(
+    () => () => {
+      locateRequest.current += 1;
+    },
+    []
+  );
 
   if (rideConfirmation) {
     return (
@@ -95,20 +105,41 @@ export default function RideForm({
     );
   }
 
+  function cancelLocating() {
+    locateRequest.current += 1;
+    setIsLocating(false);
+  }
+
   function handlePickPickup(spot) {
     Keyboard.dismiss();
     setDeparturePickerMode(null);
     setPickupInput(spot);
-    locateRequest.current += 1;
-    setIsLocating(false);
+    cancelLocating();
     setLocationNotice(null);
+  }
+
+  // Saving uses the pickup the form shows right now, so a lookup still running
+  // is dropped rather than changing the form behind the save.
+  function handleSave() {
+    cancelLocating();
+    handleSaveDriver();
+  }
+
+  // Android can open its location switch directly. iOS only offers this app's
+  // own settings page, so for that switch it gets written directions instead.
+  function handleOpenSettings() {
+    if (locationNotice.settings === 'device') {
+      Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS').catch(() => Linking.openSettings());
+    } else {
+      Linking.openSettings();
+    }
   }
 
   // Picks the landmark nearest the phone. Only the landmark (its own name and
   // coordinates) goes into the form; the phone's position never leaves
-  // locateNearestPickup.
+  // locateNearestPickup. If it fails, the current pickup is left as it is.
   async function handleUseMyLocation() {
-    if (isLocating) {
+    if (isLocating || isSubmittingDriver) {
       return;
     }
     Keyboard.dismiss();
@@ -123,36 +154,52 @@ export default function RideForm({
     }
     setIsLocating(false);
 
+    const nextStep =
+      pickupInput !== null
+        ? `Your pickup is still ${pickupInput.label}, or you can choose another spot below.`
+        : 'You can choose a pickup spot below.';
+
     if (result.spot) {
       setPickupInput(result.spot);
       setLocationNotice({
         tone: 'info',
-        message: `Pickup set to ${result.spot.label}, the closest SMU landmark to you.`,
+        message: `Pickup set to ${result.spot.label}, the closest SMU landmark to you. You can change it below.`,
       });
     } else if (result.denied) {
       setLocationNotice({
         tone: 'warning',
         message: result.canAskAgain
-          ? 'Location access wasn’t allowed. Choose a pickup spot below, or tap Use My Location to try again.'
-          : 'Location access is off for CarpoolBoard. You can turn it on in Settings, or choose a pickup spot below.',
-        showSettings: !result.canAskAgain,
+          ? `Location access wasn’t allowed. ${nextStep}`
+          : `Location access is off for this app. Turn it on in Settings, then try again. ${nextStep}`,
+        canRetry: true,
+        settings: result.canAskAgain ? undefined : 'app',
       });
     } else if (result.servicesOff) {
       setLocationNotice({
         tone: 'warning',
         message:
-          'Location Services are turned off on this phone. Turn them on in Settings › Privacy & Security, or choose a pickup spot below.',
+          Platform.OS === 'ios'
+            ? `Location Services are off on this phone. Turn them on in Settings › Privacy & Security › Location Services, then try again. ${nextStep}`
+            : `Location is off on this phone. Turn it on in Settings, then try again. ${nextStep}`,
+        canRetry: true,
+        settings: Platform.OS === 'android' ? 'device' : undefined,
       });
     } else if (result.tooFar) {
       setLocationNotice({
         tone: 'warning',
-        message:
-          'You’re more than about 1.5 km from the SMU pickup spots, so automatic selection isn’t available. Choose a pickup spot below.',
+        message: `You’re more than about 1.5 km from the SMU pickup spots, so we can’t choose one automatically. ${nextStep}`,
+      });
+    } else if (result.timedOut) {
+      setLocationNotice({
+        tone: 'warning',
+        message: `Finding your location took too long, which can happen indoors or with a weak signal. ${nextStep}`,
+        canRetry: true,
       });
     } else {
       setLocationNotice({
         tone: 'warning',
-        message: 'We couldn’t get your location. Choose a pickup spot below.',
+        message: `We couldn’t get your location. ${nextStep}`,
+        canRetry: true,
       });
     }
   }
@@ -291,26 +338,40 @@ export default function RideForm({
         <AppButton
           title={isLocating ? 'Finding nearest landmark…' : 'Use My Location'}
           icon="navigate"
-          variant="secondary"
-          size="sm"
           onPress={handleUseMyLocation}
           loading={isLocating}
+          disabled={isSubmittingDriver}
           style={styles.locateButton}
         />
         {locationNotice !== null && (
           <View accessibilityLiveRegion="polite">
             <Notice message={locationNotice.message} tone={locationNotice.tone} />
-            {locationNotice.showSettings && (
-              <Pressable
-                onPress={() => Linking.openSettings()}
-                accessibilityRole="link"
-                style={styles.settingsLink}
-              >
-                <Text style={styles.settingsLinkText}>Open Settings</Text>
-              </Pressable>
+            {(locationNotice.canRetry || locationNotice.settings) && (
+              <View style={styles.locationActions}>
+                {locationNotice.canRetry && (
+                  <AppButton
+                    title="Try Again"
+                    icon="refresh"
+                    variant="secondary"
+                    size="sm"
+                    onPress={handleUseMyLocation}
+                    disabled={isSubmittingDriver}
+                  />
+                )}
+                {locationNotice.settings && (
+                  <AppButton
+                    title="Open Settings"
+                    icon="settings-outline"
+                    variant="secondary"
+                    size="sm"
+                    onPress={handleOpenSettings}
+                  />
+                )}
+              </View>
             )}
           </View>
         )}
+        <Text style={styles.manualLabel}>Or choose a spot yourself</Text>
         <SpotPicker
           value={pickupInput}
           presets={PICKUP_LOCATIONS}
@@ -433,7 +494,7 @@ export default function RideForm({
       <AppButton
         title={isEditing ? 'Save Changes' : 'Post Ride'}
         icon={isEditing ? 'checkmark-circle-outline' : 'car-sport'}
-        onPress={handleSaveDriver}
+        onPress={handleSave}
         loading={isSubmittingDriver}
         style={styles.submit}
       />
@@ -563,18 +624,18 @@ const styles = createThemedStyles(() => ({
     color: colors.textOnAccent,
   },
   locateButton: {
-    alignSelf: 'flex-start',
     marginBottom: spacing.md,
   },
-  settingsLink: {
-    alignSelf: 'flex-start',
-    marginTop: -spacing.sm,
+  locationActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
     marginBottom: spacing.md,
-    paddingVertical: spacing.xs,
   },
-  settingsLinkText: {
+  manualLabel: {
     ...typography.label,
-    color: colors.primary,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
   pickupHint: {
     ...typography.caption,
