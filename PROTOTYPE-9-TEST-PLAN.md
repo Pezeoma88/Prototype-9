@@ -4,7 +4,7 @@
 
 **Why this behavior is essential:** a driver cannot post a ride without a pickup spot, and riders use that spot to find the ride. A wrong or unexpectedly changed pickup can send people to the wrong place.
 
-**Status:** planned. No tests have been run yet.
+**Status:** automated baseline run complete: 5 of 5 tests passed on November 4, 2026. The test files were not yet committed, so this run must be repeated once they are. Manual checks and the after-Step-2 run have not been done. See [Run log](#run-log).
 
 | Deadline | Requirement |
 | --- | --- |
@@ -78,8 +78,8 @@ The coordinates below were checked with a separate haversine calculation written
 | **Expected result** | The pickup becomes **Fondren Library** with the coordinates `32.84454, -96.78343`. Its chip is selected. The info message reads: "Pickup set to Fondren Library, the closest SMU landmark to you. You can change it below." The button returns to "Use My Location". No Try Again or Open Settings button appears. |
 | **Why this is correct** | Fondren Library is about 17 m away. The next closest landmark, Hughes-Trigg, is about 121 m away, and both are within the 1,500 m limit. The form must store the landmark's coordinates, not the phone's, to meet the privacy rule. |
 | **Test method** | Automated component test with a fake GPS answer. Repeat manually in the iOS Simulator using a custom location. |
-| **Actual result** | Baseline: Not Run. After Step 2: Not Run. |
-| **Pass/fail status** | Baseline: Not Run. After Step 2: Not Run. |
+| **Actual result** | Baseline (automated): Fondren Library was selected with the landmark's coordinates. The expected message, info tone, and button text appeared, with no Try Again or Open Settings button. Manual check: Not Run. After Step 2: Not Run. |
+| **Pass/fail status** | Baseline (automated): Pass. Manual check: Not Run. After Step 2: Not Run. |
 
 ### TC-02: GPS permission denied while a pickup is selected
 
@@ -91,8 +91,8 @@ The coordinates below were checked with a separate haversine calculation written
 | **Expected result** | **Both versions:** the pickup stays Hughes-Trigg Student Center, the message is a warning, the button returns to "Use My Location", and the app does not try to read a position.<br><br>**A:** "Location access is off for this app. Turn it on in Settings, then try again. Your pickup is still Hughes-Trigg Student Center, or you can choose another spot below." Shows Try Again and Open Settings.<br><br>**B:** "Location access wasn’t allowed. Your pickup is still Hughes-Trigg Student Center, or you can choose another spot below." Shows Try Again only. |
 | **Why this is correct** | A failed GPS attempt says nothing about whether the driver's earlier choice is wrong, so that choice must remain. The app also must not read a location without permission. Open Settings appears only when the app can no longer ask for permission itself. |
 | **Test method** | Automated component test for A and B. Repeat A manually on an iPhone by setting the app's location permission to Never. Expo's iOS code reports `canAskAgain: false` for a denied permission, so B is expected to need the automated test or Android. |
-| **Actual result** | Baseline: Not Run. After Step 2: Not Run. |
-| **Pass/fail status** | Baseline: Not Run. After Step 2: Not Run. |
+| **Actual result** | Baseline (automated): in A and B, Hughes-Trigg stayed selected, the expected warning appeared, the button returned to "Use My Location", and no position was requested. A showed Try Again and Open Settings. B showed Try Again only. Manual check: Not Run. After Step 2: Not Run. |
+| **Pass/fail status** | Baseline (automated): A Pass, B Pass. Manual check: Not Run. After Step 2: Not Run. |
 
 ### TC-03: Manual pickup selected while a GPS lookup is running
 
@@ -104,8 +104,8 @@ The coordinates below were checked with a separate haversine calculation written
 | **Expected result** | After step 2, the pickup is Meadows Museum and the button immediately returns to "Use My Location".<br><br>After step 3, the pickup is **still Meadows Museum**, and no "Pickup set to…" message or warning appears. |
 | **Why this is correct** | The driver's latest deliberate choice is the best evidence of what they want. Tapping the chip increases `locateRequest`, so the older lookup's number no longer matches and its answer is ignored. |
 | **Test method** | Automated component test using a fake GPS answer that the test releases on demand. This is the main method because a real fix can return too quickly to tap a chip in time, and the result cannot be controlled. |
-| **Actual result** | Baseline: Not Run. After Step 2: Not Run. |
-| **Pass/fail status** | Baseline: Not Run. After Step 2: Not Run. |
+| **Actual result** | Baseline (automated): after the chip tap, Meadows Museum was selected and the button returned immediately. After the GPS answer was released, Meadows Museum was still selected, with no GPS message and no second pickup change. After Step 2: Not Run. |
+| **Pass/fail status** | Baseline (automated): Pass. After Step 2: Not Run. |
 
 ### TC-04: Too far from SMU while a pickup is selected (related prediction)
 
@@ -117,8 +117,8 @@ The coordinates below were checked with a separate haversine calculation written
 | **Expected result (prediction)** | The pickup stays Moody Coliseum. The warning reads: "You’re more than about 1.5 km from the SMU pickup spots, so we can’t choose one automatically. Your pickup is still Moody Coliseum, or you can choose another spot below." **No Try Again button appears.** |
 | **Why this is correct** | The nearest landmark, Dallas Hall, is about 1,606 m away, which is over the limit. The GPS worked, so retrying would not help unless the driver moves. That is different from a timeout, where retrying may succeed. |
 | **Test method** | Automated component test. Repeat manually in the iOS Simulator using a custom location. |
-| **Actual result** | Baseline: Not Run. After Step 2: Not Run. |
-| **Pass/fail status** | Baseline: Not Run. After Step 2: Not Run. |
+| **Actual result** | Baseline (automated): Moody Coliseum stayed selected, the expected warning appeared, and there was no Try Again or Open Settings button. The prediction matched. Manual check: Not Run. After Step 2: Not Run. |
+| **Pass/fail status** | Baseline (automated): Pass. Manual check: Not Run. After Step 2: Not Run. |
 
 **Questions to discuss with the professor:**
 
@@ -161,23 +161,19 @@ Save results as `.txt` files because `.gitignore` excludes `*.log`.
 
 ### Setup
 
-Jest is not installed yet. These commands come from Expo's guide:
+The test tools are installed as dev dependencies, so they are not part of the app itself:
 
-```sh
-npx expo install jest-expo jest --dev
-npx expo install @testing-library/react-native --dev
-```
+| Package | Version | Why this version |
+| --- | --- | --- |
+| `jest-expo` | 58.0.14 | Matches Expo SDK 58 |
+| `jest` | 30.5.2 | Expo's guide says `jest-expo` needs Jest 30 on SDK 58 and later |
+| `@testing-library/react-native` | 14.1.0 | Current release; needs React 19 or later and React Native 0.78 or later |
+| `test-renderer` | 1.3.1 | Required by Testing Library 14 |
+| `@react-native/jest-preset` | 0.88.1 | Required by `jest-expo` 58 |
 
-Then add this to `package.json`:
+After cloning the repository, run `npm ci` to install them, then `npm test` to run the tests. `package.json` holds the test command and the `jest-expo` preset.
 
-```json
-{
-  "scripts": { "test": "jest" },
-  "jest": { "preset": "jest-expo" }
-}
-```
-
-This setup has not been tried on this project yet. The icon or date-picker packages may need small fakes to load under Jest. Those fakes belong in the test setup and must not require changes to the app's behavior.
+Only the icon font and `expo-location` are faked. No fake was needed for the date picker.
 
 ### How the test file should work
 
@@ -202,8 +198,9 @@ This setup has not been tried on this project yet. The icon or date-picker packa
    ```
 4. **Baseline run:** save the output, then fill in the results and run log.
    ```sh
-   npx jest --ci --verbose 2>&1 | tee test-results/baseline-$(git rev-parse --short HEAD).txt
+   npm test -- --ci --verbose --reporters=default 2>&1 | tee test-results/baseline-$(git rev-parse --short HEAD).txt
    ```
+   `--reporters=default` is needed here because `--verbose` alone did not list individual test names on this project.
 5. **Make the change:** implement Step 2 and commit it.
 6. **Confirm the tests are unchanged:** this should print nothing, where `<tests-commit>` is the commit from step 2:
    ```sh
@@ -215,7 +212,7 @@ This setup has not been tried on this project yet. The icon or date-picker packa
 
 - If a test fails, record **Fail** and investigate. Do not change an expected result just to match what happened.
 - If an expected result turns out to be wrong, explain why and record the change separately.
-- Prove the tests can fail: temporarily remove the `request !== locateRequest.current` check in a scratch copy or uncommitted change, confirm that TC-03 fails, then restore the code with `git restore screens/RideForm.js`. Do not commit this change.
+- Prove the tests can fail by breaking the app temporarily and restoring it afterward. This has been done once; see [Run log](#run-log).
 
 ### What the rerun will and will not show
 
@@ -225,15 +222,34 @@ The current code suggests Step 2 will mainly affect the map files, `screens/MapS
 
 | Run | Commit tested | App code compared with `2e175db` | Date | Method | Results | Output file |
 | --- | --- | --- | --- | --- | --- | --- |
-| Baseline | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Baseline, tests not yet committed | `d9ff1c06f644f16904627f0f990da544d3b3c22f` plus uncommitted `__tests__/`, `package.json`, and `package-lock.json` | Identical | November 4, 2026 | Automated | 5 passed, 0 failed | `test-results/baseline-d9ff1c0-uncommitted-tests.txt` |
+| Baseline, tests committed | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Manual checks | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
 | After Step 2 | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+
+The first row cannot name a single commit that contains the tests, because they were not committed when it ran. The saved output records the SHA-256 of the test file: `97fa4d1a1ef82da49bfc9bb303beec570861914c84f0eb5423d7f1d09db33d39`. The "tests committed" row is the one to use as the before-Step-2 comparison.
+
+### Problem found while setting up the tests
+
+On the first run, TC-03 failed with a 5-second timeout while the other 4 tests passed. **The fault was in the test, not the app.** `fireEvent.press` waits for the press handler to finish, the handler was waiting for the GPS answer, and the test released that answer only after the press finished. The test now starts the press, performs the remaining steps, and then waits for it. The expected result did not change, and the app code was not touched.
+
+### Proof that the tests can fail
+
+On November 4, 2026, each change below was made temporarily to the app code, the tests were run, and the code was restored. Afterward, `git diff` showed no app code changes. None of these changes was committed.
+
+| Temporary break | Failed tests | Passed tests |
+| --- | --- | --- |
+| Remove the check that ignores a cancelled lookup's late answer | TC-03 | TC-01, TC-02 A and B, TC-04 |
+| Skip the permission-denied check | TC-02 A and B | TC-01, TC-03, TC-04 |
+| Raise the distance limit from 1,500 m to 2,000 m | TC-04 | TC-01, TC-02 A and B, TC-03 |
+| Store the phone's coordinates instead of the landmark's | TC-01 | TC-02 A and B, TC-03, TC-04 |
 
 ## Comparison of results
 
 | Test | Baseline | After Step 2 | Same result? | Notes |
 | --- | --- | --- | --- | --- |
-| TC-01 | Not Run | Not Run | Not Run | |
-| TC-02 (A) | Not Run | Not Run | Not Run | |
-| TC-02 (B) | Not Run | Not Run | Not Run | |
-| TC-03 | Not Run | Not Run | Not Run | |
-| TC-04 | Not Run | Not Run | Not Run | |
+| TC-01 | Pass (automated, tests not yet committed) | Not Run | Not Run | |
+| TC-02 (A) | Pass (automated, tests not yet committed) | Not Run | Not Run | |
+| TC-02 (B) | Pass (automated, tests not yet committed) | Not Run | Not Run | |
+| TC-03 | Pass (automated, tests not yet committed) | Not Run | Not Run | Failed once because of a test bug, since fixed. See [Run log](#run-log). |
+| TC-04 | Pass (automated, tests not yet committed) | Not Run | Not Run | |
