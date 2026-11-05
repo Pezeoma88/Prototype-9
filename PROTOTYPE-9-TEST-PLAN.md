@@ -4,7 +4,7 @@
 
 **Why this behavior is essential:** a driver cannot post a ride without a pickup spot, and riders use that spot to find the ride. A wrong or unexpectedly changed pickup can send people to the wrong place.
 
-**Status:** automated baseline run complete: 5 of 5 tests passed on November 4, 2026. The test files were not yet committed, so this run must be repeated once they are. Manual checks and the after-Step-2 run have not been done. See [Run log](#run-log).
+**Status:** official automated baseline run complete: 5 of 5 tests passed on November 4, 2026, at commit `0008c88`, which contains the committed tests. Manual checks and the after-Step-2 run have not been done. See [Run log](#run-log).
 
 | Deadline | Requirement |
 | --- | --- |
@@ -223,11 +223,13 @@ The current code suggests Step 2 will mainly affect the map files, `screens/MapS
 | Run | Commit tested | App code compared with `2e175db` | Date | Method | Results | Output file |
 | --- | --- | --- | --- | --- | --- | --- |
 | Baseline, tests not yet committed | `d9ff1c06f644f16904627f0f990da544d3b3c22f` plus uncommitted `__tests__/`, `package.json`, and `package-lock.json` | Identical | November 4, 2026 | Automated | 5 passed, 0 failed | `test-results/baseline-d9ff1c0-uncommitted-tests.txt` |
-| Baseline, tests committed | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Baseline, tests committed (official) | `0008c882df703c53caf1d291d4f0e733aaa22366` (short: `0008c88`) | Identical | November 4, 2026 | Automated | 1 suite passed; 5 tests passed, 0 failed; 0.578 s | `test-results/baseline-0008c88.txt` |
 | Manual checks | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
 | After Step 2 | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
 
 The first row cannot name a single commit that contains the tests, because they were not committed when it ran. The saved output records the SHA-256 of the test file: `97fa4d1a1ef82da49bfc9bb303beec570861914c84f0eb5423d7f1d09db33d39`. The "tests committed" row is the one to use as the before-Step-2 comparison.
+
+For the official baseline at `0008c88`, `git diff 2e175db HEAD -- App.js index.js lib screens components theme` printed nothing, confirming the app code is the same as `2e175db`. Individual results: TC-01 Pass, TC-02 A Pass, TC-02 B Pass, TC-03 Pass, TC-04 Pass.
 
 ### Problem found while setting up the tests
 
@@ -248,8 +250,8 @@ On November 4, 2026, each change below was made temporarily to the app code, the
 
 | Test | Baseline | After Step 2 | Same result? | Notes |
 | --- | --- | --- | --- | --- |
-| TC-01 | Pass (automated, tests not yet committed) | Not Run | Not Run | |
-| TC-02 (A) | Pass (automated, tests not yet committed) | Not Run | Not Run | |
-| TC-02 (B) | Pass (automated, tests not yet committed) | Not Run | Not Run | |
-| TC-03 | Pass (automated, tests not yet committed) | Not Run | Not Run | Failed once because of a test bug, since fixed. See [Run log](#run-log). |
-| TC-04 | Pass (automated, tests not yet committed) | Not Run | Not Run | |
+| TC-01 | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |
+| TC-02 (A) | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |
+| TC-02 (B) | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |
+| TC-03 | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | Failed once because of a test bug, since fixed. See [Run log](#run-log). |
+| TC-04 | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |

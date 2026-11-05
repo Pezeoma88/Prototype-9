@@ -1,0 +1,18 @@
+
+> carpoolboard@1.0.0 test
+> jest --ci --verbose --reporters=default
+
+PASS __tests__/pickup-selection-test.js
+  GPS and manual pickup selection
+    ✓ TC-01: a position near SMU selects the nearest landmark (75 ms)
+    ✓ TC-03: a late GPS answer cannot replace a manual choice (61 ms)
+    ✓ TC-04: a position past the limit keeps the pickup and offers no retry (13 ms)
+    TC-02: permission denied while a pickup is selected
+      ✓ A: cannot ask again, so the form offers Settings (14 ms)
+      ✓ B: can ask again, so the form offers Try Again only (23 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Time:        0.578 s, estimated 3 s
+Ran all test suites.
