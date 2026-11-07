@@ -6,6 +6,8 @@
 
 **Status:** official automated baseline run complete: 5 of 5 tests passed on November 4, 2026, at commit `0008c88`, which contains the committed tests. Manual checks and the after-Step-2 run have not been done. See [Run log](#run-log).
 
+**Step 2 (map zoom controls):** test cases and expected results recorded on November 7, 2026, **before** any Step 2 code was written. See [Step 2 test cases](#step-2-test-cases-map-zoom-controls). All Step 2 tests and checks are Not Run.
+
 | Deadline | Requirement |
 | --- | --- |
 | Thursday, November 5 | Record the test cases in the repository and discuss them in lab |
@@ -125,6 +127,72 @@ The coordinates below were checked with a separate haversine calculation written
 - Is keeping the pickup right if the driver has moved and the old spot may no longer make sense? I predict the app keeps it, and I think that is reasonable because the message clearly names the spot still selected.
 - Should this boundary also be tested just inside the limit? A follow-up input is `32.8579, -96.7849`, about 1,405 m from Dallas Hall, which should select Dallas Hall.
 
+## Step 2 test cases: map zoom controls
+
+These cases were written on November 7, 2026, before any Step 2 code existed, so the expected results are predictions. None of them has been run. They test the **new** feature, so they have no baseline result: at `0008c88` the zoom controls do not exist.
+
+### How map zoom will work (planned)
+
+This is the design the expected results are based on. If the implementation has to differ, the difference will be recorded under [Discrepancies](#discrepancies), not hidden by editing these expectations.
+
+- **Where:** the Map tab (`screens/MapScreen.js`). The pickup preview on Ride Details (`components/PickupMapPreview.js`) stays fixed, with gestures off, and gets no controls.
+- **Buttons:** three buttons over the map, with these accessibility labels: **Zoom in**, **Zoom out**, and **Re-center map**.
+- **Zoom in / Zoom out:** take the map's latest visible region and keep its center. Zoom in halves `latitudeDelta` and `longitudeDelta`. Zoom out doubles them. The map is moved with `animateToRegion`.
+- **Latest region:** saved from the map's `onRegionChangeComplete`, so the buttons start from where the user has pinched or panned to, not from the starting view. Before any change it is `SMU_MAP_REGION` (`32.8413, -96.7805`, deltas `0.018`).
+- **Limits:** each delta is kept between **0.002** (the closest the buttons can zoom in) and **0.2** (the farthest they can zoom out). Each delta is limited separately.
+- **Re-center map while browsing:** returns to `SMU_MAP_REGION` exactly.
+- **Re-center map while a route is open:** re-frames the route using the existing `fitMapTo` (the same framing used when the route opens), instead of returning to `SMU_MAP_REGION`. The route stays open.
+- **Map not ready:** if the map's ref is not available yet, a button tap does nothing and does not crash.
+- **Code:** the zoom calculation goes in a new file, `lib/mapZoom.js`, as a pure function `zoomRegion(region, factor)`, where factor `0.5` zooms in and `2` zooms out. The pickup files (`screens/RideForm.js`, `lib/currentLocation.js`, `lib/nearestPickup.js`, `lib/pickupLocations.js`) are not changed.
+
+### Automated tests
+
+**File:** `__tests__/map-zoom-test.js` (to be written in Step 2).
+
+**Method:** component tests with Jest and React Native Testing Library, rendering the real `MapScreen` and the real `lib/mapZoom.js`. Only `react-native-maps` is replaced, with a fake `MapView` that records each `animateToRegion` and `fitToCoordinates` call and can report a region change. For Z-09, `fetchDrivingRoute` from `lib/routing.js` is also faked, so no network is used. Z-08 calls `zoomRegion` directly. Expected values are written out in the test file, not imported from the app. Decimal values are compared to 6 decimal places, because halving and doubling decimals can leave tiny rounding differences.
+
+| ID | Purpose | Starting conditions | Action/input | Expected result | Actual result | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Z-01 | Zoom in from the starting view | Map tab rendered, browsing, no region change reported | Tap **Zoom in** once | `animateToRegion` receives center `32.8413, -96.7805` with both deltas `0.009` | Not Run | Not Run |
+| Z-02 | Zoom out from the starting view | Same as Z-01 | Tap **Zoom out** once | `animateToRegion` receives center `32.8413, -96.7805` with both deltas `0.036` | Not Run | Not Run |
+| Z-03 | Edge case: closest zoom limit | Same as Z-01 | Tap **Zoom in** 6 times | Deltas go `0.009`, `0.0045`, `0.00225`, then `0.002` on the 4th tap (`0.001125` limited to `0.002`). Later taps leave both deltas at `0.002`. No call ever has a delta below `0.002`. The center never changes. | Not Run | Not Run |
+| Z-04 | Edge case: farthest zoom limit | Same as Z-01 | Tap **Zoom out** 6 times | Deltas go `0.036`, `0.072`, `0.144`, then `0.2` on the 4th tap (`0.288` limited to `0.2`). Later taps leave both deltas at `0.2`. No call ever has a delta above `0.2`. The center never changes. | Not Run | Not Run |
+| Z-05 | Edge case: zoom starts from where the user panned | Fake map reports a region change to center `32.85, -96.79`, deltas `0.018` | Tap **Zoom in** once | `animateToRegion` receives center `32.85, -96.79` with deltas `0.009`, **not** the SMU center | Not Run | Not Run |
+| Z-06 | Re-center after zooming and panning | Zoom in once, then the fake map reports a region change to center `32.85, -96.79`, deltas `0.009` | Tap **Re-center map** | `animateToRegion` receives exactly `32.8413, -96.7805`, deltas `0.018` | Not Run | Not Run |
+| Z-07 | Edge case: tap before the map is ready | The fake map provides no ref methods | Tap **Zoom in**, **Zoom out**, and **Re-center map** | No error is thrown, no map call is recorded, and the Map tab still shows its header | Not Run | Not Run |
+| Z-08 | Unit test: each delta is scaled and limited separately | Call `zoomRegion` directly | **A:** region `32.84, -96.78`, deltas lat `0.01`, lng `0.3`, factor `2`.<br>**B:** same center, deltas lat `0.003`, lng `0.05`, factor `0.5` | **A:** lat delta `0.02`, lng delta `0.2` (`0.6` limited).<br>**B:** lat delta `0.002` (`0.0015` limited), lng delta `0.025`.<br>Both keep center `32.84, -96.78`, and the input region object is not changed. | Not Run | Not Run |
+| Z-09 | Re-center while a route is open re-frames the route | Map tab rendered with one ride: pickup **Hughes-Trigg Student Center** (`32.84354, -96.7833`), destination point **Fondren Library** (`32.84454, -96.78343`). `fetchDrivingRoute` is faked to return the road coordinates `32.84354, -96.7833` → `32.8440, -96.7834` → `32.84454, -96.78343`. The route has been opened with **View Route** and has finished loading. Earlier map calls are cleared. | Tap **Re-center map** | `fitToCoordinates` is called once with exactly those 3 road coordinates, `animated: true`, and edge padding top `70`, left `50`, right `50` (the bottom depends on the route card's measured height, as in `fitMapTo`). `animateToRegion` is **not** called, so the map does not return to `SMU_MAP_REGION`. The route card is still showing. | Not Run | Not Run |
+
+### Regression check: zoom must not change the selected pickup
+
+| Field | Details |
+| --- | --- |
+| **ID** | R-01 (automated, in `__tests__/map-zoom-test.js`) |
+| **Purpose** | Confirm that zooming and re-centering only move the map. They must not change which pickup spot is selected, where any pickup pin is, or any ride's pickup data. |
+| **Starting conditions** | Map tab rendered with two rides: one leaving from **Fondren Library** (`32.84454, -96.78343`) and one from **Moody Coliseum** (`32.8404, -96.78068`). Browsing, no route open. |
+| **Action/input** | 1. Tap the Fondren Library pin.<br>2. Tap **Zoom in**, **Zoom out**, and **Re-center map**. |
+| **Expected result** | After step 1, the preview shows **Fondren Library** and "1 ride leaving from here". After step 2: the preview still shows Fondren Library and the same ride; the Fondren and Moody pins are still at exactly the coordinates above; the rides passed to the Map tab are unchanged (compared with a copy made before step 1); and `onOpenRide` is not called. |
+| **Why this is correct** | The zoom buttons sit over the map but are not map taps, so they must not close the preview the way tapping the map does. Pickup data comes from the ride and only the driver can change it, through the ride form. |
+| **Actual result** | Not Run |
+| **Status** | Not Run |
+
+**Pickup selection itself** (choosing a spot in the ride form) is protected by rerunning TC-01 to TC-04 unchanged, and by confirming that Step 2 did not change the pickup files. See [Run order](#run-order).
+
+### Manual checks
+
+The automated tests use a fake map, so they show that the app **asks** the map to move, not that the real map does. These four checks use the real map in the iOS Simulator or on an iPhone, with at least one ride on the board that has a pickup spot.
+
+| ID | Check | Steps | Expected result | Actual result | Status |
+| --- | --- | --- | --- | --- | --- |
+| MZ-1 | Extreme zoom and Re-center | On the Map tab, pinch out until the whole United States is visible, then pan to another city. Tap **Re-center map**. | The map returns to the SMU campus view, with the same pins as when the tab opened. | Not Run | Not Run |
+| MZ-2 | Zoom limits: closest in and farthest out | **A (closest in):** from the campus view, tap **Zoom in** repeatedly until the map stops changing.<br>**B (farthest out):** tap **Re-center map**, then tap **Zoom out** repeatedly until the map stops changing. | **A:** the map stops at a close campus view (delta about `0.002`, a few buildings across). Further taps do nothing, and **Zoom out** still works.<br>**B:** the map stops at a wide view (delta about `0.2`, central Dallas around SMU). Further taps do nothing, and **Zoom in** still works.<br>Nothing breaks in either case. | Not Run | Not Run |
+| MZ-3 | Short route framing: Hughes-Trigg to Fondren | Open the route for a ride from **Hughes-Trigg Student Center** to **Fondren Library** (about 110 m apart). | Both pins are visible above the route card, and the map does not zoom in tighter than the closest zoom limit. | Not Run | Not Run |
+| MZ-4 | Buttons do not cover the map cards | 1. Tap a pin so the ride preview card appears.<br>2. Open a route so the route card appears.<br>Check on the smallest available iPhone screen. | The three buttons never cover the preview card, the route card, the top status notes, or the Refresh button. All buttons and cards can still be tapped. | Not Run | Not Run |
+
+**Note on MZ-3:** the buttons' limits do not apply to `fitToCoordinates`, which frames a route automatically. Passing MZ-3 therefore depends on also setting a map-level zoom limit (`maxZoomLevel` on `MapView`). During implementation, the react-native-maps 1.29.11 documentation will be checked for whether `maxZoomLevel` is supported and enforced on our target platforms (iOS, and Android if tested). The expected result above stays as written. If the real map behaves differently, MZ-3 is recorded as Fail with an entry under [Discrepancies](#discrepancies), not by changing the expectation.
+
+**Note on MZ-2 B:** a delta of `0.2` is the limit for the **buttons**. Pinching can still zoom out further unless a map-level limit is also set; MZ-1 relies on that being possible.
+
 ## An important behavior these tests do not cover
 
 **These tests do not show that the chosen pickup is saved correctly or reaches riders.**
@@ -138,7 +206,7 @@ Other gaps to keep in mind:
 - **Real GPS hardware:** fake GPS answers test the app's decisions, not how accurate a real phone is. Fondren Library and Hughes-Trigg are only about 110 m apart, and Balanced accuracy is about 100 m, so a real phone standing between them could reasonably choose either one.
 - **Recent positions:** because a position up to 2 minutes old can be used, a driver who just moved could get the previous nearby landmark.
 - **Other results:** the timeout, Location Services off, and general error results are not among these four cases.
-- **Step 2 itself:** these tests do not check that the map zoom controls work. Step 2 needs its own check.
+- **Step 2 itself:** these tests do not check that the map zoom controls work. Step 2 needs its own check. Those checks are now listed under [Step 2 test cases](#step-2-test-cases-map-zoom-controls). Because they use a fake map, they cannot show that the real map visibly zooms or respects the limits. Only the manual checks MZ-1 to MZ-4 cover that, and only on the devices tried.
 
 ## Making the tests repeatable
 
@@ -153,6 +221,7 @@ Fake only `expo-location`, the point where the app talks to the phone's location
 | File | Purpose |
 | --- | --- |
 | `__tests__/pickup-selection-test.js` | The automated versions of TC-01 to TC-04 |
+| `__tests__/map-zoom-test.js` | Step 2: the automated versions of Z-01 to Z-09 and R-01 (to be written in Step 2) |
 | `package.json`, `package-lock.json` | Test tools, their versions, and the test command |
 | `PROTOTYPE-9-TEST-PLAN.md` | Test cases, manual steps, and results |
 | `test-results/*.txt` | Saved output from each run |
@@ -201,12 +270,14 @@ Only the icon font and `expo-location` are faked. No fake was needed for the dat
    npm test -- --ci --verbose --reporters=default 2>&1 | tee test-results/baseline-$(git rev-parse --short HEAD).txt
    ```
    `--reporters=default` is needed here because `--verbose` alone did not list individual test names on this project.
-5. **Make the change:** implement Step 2 and commit it.
-6. **Confirm the tests are unchanged:** this should print nothing, where `<tests-commit>` is the commit from step 2:
+5. **Make the change:** implement Step 2, together with `__tests__/map-zoom-test.js`, and commit it. Before committing, prove the new tests can fail (see [Rules for honest results](#rules-for-honest-results)).
+6. **Confirm the GPS tests and pickup files are unchanged:** both commands should print nothing. The tests commit from step 2 is `0008c88`. (Step 2 adds a new test file, so only the original GPS test file is compared, not the whole `__tests__` folder.)
    ```sh
-   git diff <tests-commit> HEAD -- __tests__
+   git diff 0008c88 HEAD -- __tests__/pickup-selection-test.js
+   git diff 0008c88 HEAD -- screens/RideForm.js lib/currentLocation.js lib/nearestPickup.js lib/pickupLocations.js
    ```
-7. **Rerun:** run the same command, saving the output as `test-results/after-step-2-<hash>.txt`, and compare the results.
+7. **Rerun:** run the same command, saving the output as `test-results/after-step-2-<hash>.txt`. This runs the original GPS tests and the new Step 2 tests together. Record the full and short hash of the Step 2 commit, then compare the results.
+8. **Manual checks:** do MZ-1 to MZ-4 on the Step 2 commit and record the device, the iOS version, and the results.
 
 ### Rules for honest results
 
@@ -225,7 +296,8 @@ The current code suggests Step 2 will mainly affect the map files, `screens/MapS
 | Baseline, tests not yet committed | `d9ff1c06f644f16904627f0f990da544d3b3c22f` plus uncommitted `__tests__/`, `package.json`, and `package-lock.json` | Identical | November 4, 2026 | Automated | 5 passed, 0 failed | `test-results/baseline-d9ff1c0-uncommitted-tests.txt` |
 | Baseline, tests committed (official) | `0008c882df703c53caf1d291d4f0e733aaa22366` (short: `0008c88`) | Identical | November 4, 2026 | Automated | 1 suite passed; 5 tests passed, 0 failed; 0.578 s | `test-results/baseline-0008c88.txt` |
 | Manual checks | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
-| After Step 2 | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| After Step 2 (automated: TC-01 to TC-04, Z-01 to Z-09, R-01) | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Step 2 manual checks (MZ-1 to MZ-4) | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
 
 The first row cannot name a single commit that contains the tests, because they were not committed when it ran. The saved output records the SHA-256 of the test file: `97fa4d1a1ef82da49bfc9bb303beec570861914c84f0eb5423d7f1d09db33d39`. The "tests committed" row is the one to use as the before-Step-2 comparison.
 
@@ -255,3 +327,28 @@ On November 4, 2026, each change below was made temporarily to the app code, the
 | TC-02 (B) | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |
 | TC-03 | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | Failed once because of a test bug, since fixed. See [Run log](#run-log). |
 | TC-04 | Pass (automated, official baseline `0008c88`) | Not Run | Not Run | |
+
+**Step 2 tests.** These test the new feature, so they have no baseline result: the zoom controls don't exist at `0008c88`.
+
+| Test | Type | Baseline | After Step 2 | Notes |
+| --- | --- | --- | --- | --- |
+| Z-01 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-02 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-03 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-04 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-05 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-06 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-07 | Automated | N/A (added in Step 2) | Not Run | |
+| Z-08 | Automated (unit) | N/A (added in Step 2) | Not Run | |
+| Z-09 | Automated | N/A (added in Step 2) | Not Run | |
+| R-01 | Automated (regression) | N/A (added in Step 2) | Not Run | |
+| MZ-1 | Manual | N/A | Not Run | |
+| MZ-2 | Manual | N/A | Not Run | |
+| MZ-3 | Manual | N/A | Not Run | Depends on a map-level zoom limit; see the note under [Manual checks](#manual-checks). |
+| MZ-4 | Manual | N/A | Not Run | |
+
+## Discrepancies
+
+Each case where an actual result differs from its expected result gets an entry here: the test, what was expected, what happened, the cause, and whether the fault was in the app or the test. Expected results are never edited to match what happened.
+
+None recorded yet. No Step 2 test has been run.
