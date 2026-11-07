@@ -1,0 +1,33 @@
+
+> carpoolboard@1.0.0 test
+> jest --ci --verbose --reporters=default
+
+PASS __tests__/map-zoom-test.js
+  Map zoom controls
+    ✓ Z-01: Zoom in from the starting view halves the deltas around the SMU center (10 ms)
+    ✓ Z-02: Zoom out from the starting view doubles the deltas around the SMU center (2 ms)
+    ✓ Z-03: zooming in stops at the closest limit, 0.002 (4 ms)
+    ✓ Z-04: zooming out stops at the farthest limit, 0.2 (3 ms)
+    ✓ Z-05: zoom starts from where the user panned, not from the SMU center (1 ms)
+    ✓ Z-06: Re-center after zooming and panning returns exactly to the SMU view (2 ms)
+    ✓ Z-07: tapping the controls before the map is ready does nothing and does not crash (2 ms)
+    ✓ Z-09: Re-center while a route is open re-frames the route instead of returning to SMU (114 ms)
+    ✓ R-01: zooming and re-centering do not change the selected pickup or any ride (5 ms)
+    Z-08: zoomRegion scales and limits each delta separately
+      ✓ A: zoom out, longitude delta limited to 0.2
+      ✓ B: zoom in, latitude delta limited to 0.002
+
+PASS __tests__/pickup-selection-test.js
+  GPS and manual pickup selection
+    ✓ TC-01: a position near SMU selects the nearest landmark (33 ms)
+    ✓ TC-03: a late GPS answer cannot replace a manual choice (62 ms)
+    ✓ TC-04: a position past the limit keeps the pickup and offers no retry (14 ms)
+    TC-02: permission denied while a pickup is selected
+      ✓ A: cannot ask again, so the form offers Settings (14 ms)
+      ✓ B: can ask again, so the form offers Try Again only (12 ms)
+
+Test Suites: 2 passed, 2 total
+Tests:       16 passed, 16 total
+Snapshots:   0 total
+Time:        0.772 s, estimated 1 s
+Ran all test suites.
