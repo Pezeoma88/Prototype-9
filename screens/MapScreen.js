@@ -9,6 +9,7 @@ import Notice from '../components/Notice';
 import RouteLine from '../components/RouteLine';
 import ScreenHeader from '../components/ScreenHeader';
 import { SMU_MAP_REGION, isSamePickup, pickupKey } from '../lib/pickupLocations';
+import { MAP_MAX_ZOOM_LEVEL, ZOOM_IN_FACTOR, ZOOM_OUT_FACTOR, zoomRegion } from '../lib/mapZoom';
 import {
   fetchDrivingRoute,
   formatDriveTime,
@@ -34,6 +35,8 @@ import { colors, createThemedStyles, getColorScheme, gutter, radius, shadow, spa
 
 // How long the route card is assumed to be until it has been measured.
 const ROUTE_CARD_HEIGHT_GUESS = 300;
+// Width and height of each round zoom control.
+const ZOOM_BUTTON_SIZE = 40;
 
 export default function MapScreen({
   drivers,
@@ -57,6 +60,11 @@ export default function MapScreen({
   const [routeResult, setRouteResult] = useState(null);
   const mapRef = useRef(null);
   const routeCardHeightRef = useRef(ROUTE_CARD_HEIGHT_GUESS);
+  // The map's latest visible region, so the zoom buttons start from wherever
+  // the user has pinched or panned to. Updated when the map reports a
+  // finished move, and right away when a zoom button asks for a new region
+  // (so quick repeated taps build on each other).
+  const regionRef = useRef(SMU_MAP_REGION);
 
   // Group the rides that have a pickup into one entry per spot.
   const spots = [];
@@ -136,6 +144,41 @@ export default function MapScreen({
     setRouteRideId(rideId);
   }
 
+  // The map's methods, or null if the map isn't ready (no ref yet).
+  function readyMap() {
+    const map = mapRef.current;
+    return map && typeof map.animateToRegion === 'function' ? map : null;
+  }
+
+  // Zoom in / Zoom out: same center, smaller or larger visible area, kept
+  // within the limits in lib/mapZoom.js. Only the map moves: the selected
+  // pin, the preview card and the route view are left as they are.
+  function handleZoom(factor) {
+    const map = readyMap();
+    if (!map) return;
+    const next = zoomRegion(regionRef.current, factor);
+    regionRef.current = next;
+    map.animateToRegion(next, 250);
+  }
+
+  // Re-center: while a route is open, frame that route again (the road
+  // route once loaded, otherwise its two pins); while browsing, go back to
+  // the campus view.
+  function handleRecenter() {
+    const map = readyMap();
+    if (!map) return;
+    if (routeRide) {
+      fitMapTo(
+        route.status === 'road'
+          ? route.coordinates
+          : [routeRide.pickup, routeRide.destinationPoint]
+      );
+      return;
+    }
+    regionRef.current = SMU_MAP_REGION;
+    map.animateToRegion(SMU_MAP_REGION, 400);
+  }
+
   // Back to browsing: the pin the route was opened from is still selected.
   function handleCloseRoute() {
     setRouteRideId(null);
@@ -177,6 +220,13 @@ export default function MapScreen({
           userInterfaceStyle={getColorScheme()}
           showsUserLocation={false}
           toolbarEnabled={false}
+          // Stops route framing (and pinching) from zooming in closer than
+          // the Zoom in button can. No minimum is set, so the user can still
+          // pinch out as far as they like and use Re-center to come back.
+          maxZoomLevel={MAP_MAX_ZOOM_LEVEL}
+          onRegionChangeComplete={(region) => {
+            regionRef.current = region;
+          }}
           onPress={(event) => {
             // Tapping the map itself (not a pin) closes the preview.
             // The route view is only closed with its own Close buttons.
@@ -279,6 +329,19 @@ export default function MapScreen({
               </Text>
             </View>
           ) : null}
+        </View>
+
+        {/* Zoom controls, top right, in both browsing and route view. The
+            status notes above are inset on the right so they never sit
+            underneath these. */}
+        <View style={styles.zoomControls}>
+          <MapControlButton icon="add" label="Zoom in" onPress={() => handleZoom(ZOOM_IN_FACTOR)} />
+          <MapControlButton
+            icon="remove"
+            label="Zoom out"
+            onPress={() => handleZoom(ZOOM_OUT_FACTOR)}
+          />
+          <MapControlButton icon="locate" label="Re-center map" onPress={handleRecenter} />
         </View>
 
         {/* Ride preview for the tapped pin */}
@@ -468,6 +531,20 @@ export default function MapScreen({
   );
 }
 
+function MapControlButton({ icon, label, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={4}
+      style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
+    >
+      <Ionicons name={icon} size={20} color={colors.text} />
+    </Pressable>
+  );
+}
+
 // Whether a ride has both ends of a route: a pickup spot and a mapped
 // destination that aren't the same place.
 function hasRoute(ride) {
@@ -500,8 +577,29 @@ const styles = createThemedStyles(() => ({
     position: 'absolute',
     top: spacing.md,
     left: gutter,
-    right: gutter,
+    // Leaves room for the zoom controls on the right.
+    right: spacing.md + ZOOM_BUTTON_SIZE + spacing.sm,
     alignItems: 'center',
+  },
+  zoomControls: {
+    position: 'absolute',
+    top: spacing.md,
+    right: spacing.md,
+    gap: spacing.sm,
+  },
+  zoomButton: {
+    width: ZOOM_BUTTON_SIZE,
+    height: ZOOM_BUTTON_SIZE,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    ...shadow.card,
+  },
+  zoomButtonPressed: {
+    opacity: 0.7,
   },
   pill: {
     flexDirection: 'row',
