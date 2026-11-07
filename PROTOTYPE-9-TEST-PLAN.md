@@ -4,9 +4,9 @@
 
 **Why this behavior is essential:** a driver cannot post a ride without a pickup spot, and riders use that spot to find the ride. A wrong or unexpectedly changed pickup can send people to the wrong place.
 
-**Status:** official automated baseline run complete: 5 of 5 tests passed on November 4, 2026, at commit `0008c88`, which contains the committed tests. The official after-Step-2 automated run is also complete: 16 of 16 tests passed on November 7, 2026, at commit `71dfcd2` (the 5 original GPS tests plus 11 new Step 2 tests). Manual checks have not been done. See [Run log](#run-log).
+**Status:** official automated baseline run complete: 5 of 5 tests passed on November 4, 2026, at commit `0008c88`, which contains the committed tests. The official after-Step-2 automated run is also complete: 16 of 16 tests passed on November 7, 2026, at commit `71dfcd2` (the 5 original GPS tests plus 11 new Step 2 tests). The Step 2 manual checks MZ-1 to MZ-4 also passed (user-observed on a physical iPhone 11 with iOS 26, in Expo Go, November 7, 2026). Six additional GPS manual checks (GPS-1 to GPS-6, user-observed on the same iPhone) also passed. They are **not** the manual checks defined in the test cases. Of those, the TC-02 A manual check also passed on the same iPhone. The TC-01 and TC-04 Simulator manual checks are still Not Run. See [Additional GPS manual checks](#additional-gps-manual-checks-user-observed) and [Run log](#run-log).
 
-**Step 2 (map zoom controls):** test cases and expected results recorded on November 7, 2026, **before** any Step 2 code was written. See [Step 2 test cases](#step-2-test-cases-map-zoom-controls). Step 2 was then implemented in commit `71dfcd2`. All automated Step 2 tests passed there. The manual checks MZ-1 to MZ-4 are Not Run.
+**Step 2 (map zoom controls):** test cases and expected results recorded on November 7, 2026, **before** any Step 2 code was written. See [Step 2 test cases](#step-2-test-cases-map-zoom-controls). Step 2 was then implemented in commit `71dfcd2`. All automated Step 2 tests passed there. The manual checks MZ-1 to MZ-4 passed when checked by hand on a physical iPhone 11 (iOS 26, Expo Go) on November 7, 2026, against app code `71dfcd2`. These are user-observed results, not automated tests.
 
 | Deadline | Requirement |
 | --- | --- |
@@ -101,8 +101,8 @@ The coordinates below were checked with a separate haversine calculation written
 | **Expected result** | **Both versions:** the pickup stays Hughes-Trigg Student Center, the message is a warning, the button returns to "Use My Location", and the app does not try to read a position.<br><br>**A:** "Location access is off for this app. Turn it on in Settings, then try again. Your pickup is still Hughes-Trigg Student Center, or you can choose another spot below." Shows Try Again and Open Settings.<br><br>**B:** "Location access wasn’t allowed. Your pickup is still Hughes-Trigg Student Center, or you can choose another spot below." Shows Try Again only. |
 | **Why this is correct** | A failed GPS attempt says nothing about whether the driver's earlier choice is wrong, so that choice must remain. The app also must not read a location without permission. Open Settings appears only when the app can no longer ask for permission itself. |
 | **Test method** | Automated component test for A and B. Repeat A manually on an iPhone by setting the app's location permission to Never. Expo's iOS code reports `canAskAgain: false` for a denied permission, so B is expected to need the automated test or Android. |
-| **Actual result** | Baseline (automated): in A and B, Hughes-Trigg stayed selected, the expected warning appeared, the button returned to "Use My Location", and no position was requested. A showed Try Again and Open Settings. B showed Try Again only. Manual check: Not Run. After Step 2 (automated, `71dfcd2`): same results as the baseline. |
-| **Pass/fail status** | Baseline (automated): A Pass, B Pass. Manual check: Not Run. After Step 2 (automated, `71dfcd2`): A Pass, B Pass. |
+| **Actual result** | Baseline (automated): in A and B, Hughes-Trigg stayed selected, the expected warning appeared, the button returned to "Use My Location", and no position was requested. A showed Try Again and Open Settings. B showed Try Again only. Manual check of A (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026, app code `71dfcd2`): with Hughes-Trigg selected and location permission denied, Hughes-Trigg remained selected, the warning matched the expected message exactly, and both Try Again and Open Settings were visible. The other two parts of the expected result (the button returning to "Use My Location" and no position being read) were not reported. After Step 2 (automated, `71dfcd2`): same results as the baseline. |
+| **Pass/fail status** | Baseline (automated): A Pass, B Pass. Manual check of A (user-observed, physical iPhone 11, iOS 26): Pass. After Step 2 (automated, `71dfcd2`): A Pass, B Pass. |
 
 ### TC-03: Manual pickup selected while a GPS lookup is running
 
@@ -134,6 +134,32 @@ The coordinates below were checked with a separate haversine calculation written
 
 - Is keeping the pickup right if the driver has moved and the old spot may no longer make sense? I predict the app keeps it, and I think that is reasonable because the message clearly names the spot still selected.
 - Should this boundary also be tested just inside the limit? A follow-up input is `32.8579, -96.7849`, about 1,405 m from Dallas Hall, which should select Dallas Hall.
+
+## Additional GPS manual checks (user-observed)
+
+These six checks were done by hand on November 7, 2026, **after** Step 2, on a physical iPhone 11 with iOS 26 in Expo Go. The application code tested was `71dfcd2`. HEAD was `a0b5352` during testing, a documentation-only commit with identical app code.
+
+**How these differ from the test cases above:**
+
+- **They are not the manual checks defined in TC-01, TC-02 A, and TC-04.** TC-02 A's own manual check was done separately and passed (see TC-02). TC-01 and TC-04 remain Not Run. See [Discrepancies](#discrepancies), D-1.
+- **No expected results were recorded in advance.** The "Purpose" column describes what each check looked at, written from the tester's report.
+- **They were not run at the baseline,** so they show the behavior at `71dfcd2` only. They are not a before-and-after comparison.
+- **They are user-observed results, not automated tests.**
+
+| ID | Purpose | Actual result | Status |
+| --- | --- | --- | --- |
+| GPS-1 | Use My Location sets a pickup shown in the pickup map preview | Current GPS location appeared correctly in the pickup map preview. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| GPS-2 | A pickup chosen by hand replaces a GPS-chosen pickup | Changing to a manually selected pickup updated the preview and replaced the GPS selection. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| GPS-3 | Using My Location again after a manual choice | Switching back to current location updated the preview correctly. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| GPS-4 | Location permission denied | Denying location permission was handled without crashing; manual pickup selection remained available. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| GPS-5 | A manual pickup survives leaving and returning to the ride form | Manually selected pickup remained selected after navigating away from the Create Ride form and returning. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| GPS-6 | A submitted ride keeps its pickup, and the Map tab shows it | A submitted ride retained the selected pickup location, and the Map tab displayed the correct pickup. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+
+**Notes:**
+
+- **GPS-1 and GPS-3:** by design, the form never stores or shows the phone's own position. It picks the nearest SMU landmark (see [Privacy](#privacy)). "Current GPS location" here means the landmark chosen from it. The [Manual test notes](#manual-test-notes) ask a real-iPhone tester to record where they stood and which landmark was chosen. Neither was recorded, so the chosen landmark can't be checked against the expected nearest one.
+- **GPS-4:** this shows the app didn't crash and manual selection still worked. It doesn't check what TC-02 A specifies: that an already-selected pickup is kept, the exact warning text, and the Try Again and Open Settings buttons. Those were checked separately in TC-02 A's own manual check.
+- **GPS-6:** this is a single manual observation of part of the [important behavior the automated tests don't cover](#an-important-behavior-these-tests-do-not-cover). It doesn't make that behavior covered by the repeatable tests.
 
 ## Step 2 test cases: map zoom controls
 
@@ -194,14 +220,16 @@ The automated tests use a fake map, so they show that the app **asks** the map t
 
 | ID | Check | Steps | Expected result | Actual result | Status |
 | --- | --- | --- | --- | --- | --- |
-| MZ-1 | Extreme zoom and Re-center | On the Map tab, pinch out until the whole United States is visible, then pan to another city. Tap **Re-center map**. | The map returns to the SMU campus view, with the same pins as when the tab opened. | Not Run | Not Run |
-| MZ-2 | Zoom limits: closest in and farthest out | **A (closest in):** from the campus view, tap **Zoom in** repeatedly until the map stops changing.<br>**B (farthest out):** tap **Re-center map**, then tap **Zoom out** repeatedly until the map stops changing. | **A:** the map stops at a close campus view (delta about `0.002`, a few buildings across). Further taps do nothing, and **Zoom out** still works.<br>**B:** the map stops at a wide view (delta about `0.2`, central Dallas around SMU). Further taps do nothing, and **Zoom in** still works.<br>Nothing breaks in either case. | Not Run | Not Run |
-| MZ-3 | Short route framing: Hughes-Trigg to Fondren | Open the route for a ride from **Hughes-Trigg Student Center** to **Fondren Library** (about 110 m apart). | Both pins are visible above the route card, and the map does not zoom in tighter than the closest zoom limit. | Not Run | Not Run |
-| MZ-4 | Buttons do not cover the map cards | 1. Tap a pin so the ride preview card appears.<br>2. Open a route so the route card appears.<br>Check on the smallest available iPhone screen. | The three buttons never cover the preview card, the route card, the top status notes, or the Refresh button. All buttons and cards can still be tapped. | Not Run | Not Run |
+| MZ-1 | Extreme zoom and Re-center | On the Map tab, pinch out until the whole United States is visible, then pan to another city. Tap **Re-center map**. | The map returns to the SMU campus view, with the same pins as when the tab opened. | Re-center returned the map to SMU correctly. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| MZ-2 | Zoom limits: closest in and farthest out | **A (closest in):** from the campus view, tap **Zoom in** repeatedly until the map stops changing.<br>**B (farthest out):** tap **Re-center map**, then tap **Zoom out** repeatedly until the map stops changing. | **A:** the map stops at a close campus view (delta about `0.002`, a few buildings across). Further taps do nothing, and **Zoom out** still works.<br>**B:** the map stops at a wide view (delta about `0.2`, central Dallas around SMU). Further taps do nothing, and **Zoom in** still works.<br>Nothing breaks in either case. | **A and B:** both the closest-in and the farthest-out button limits worked, and zooming in the opposite direction still worked afterwards. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| MZ-3 | Short route framing: Hughes-Trigg to Fondren | Open the route for a ride from **Hughes-Trigg Student Center** to **Fondren Library** (about 110 m apart). | Both pins are visible above the route card, and the map does not zoom in tighter than the closest zoom limit. | The Hughes-Trigg to Fondren short route displayed correctly, with both endpoints visible. **Re-center map** also framed the route correctly (the on-device counterpart of Z-09). A brief native zoom past the limit was not independently checked, so strict `maxZoomLevel` enforcement remains unverified (see K-1). (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
+| MZ-4 | Buttons do not cover the map cards | 1. Tap a pin so the ride preview card appears.<br>2. Open a route so the route card appears.<br>Check on the smallest available iPhone screen. | The three buttons never cover the preview card, the route card, the top status notes, or the Refresh button. All buttons and cards can still be tapped. | The zoom buttons, the preview card, the route card, and the status notes displayed correctly, without overlap. (user-observed, physical iPhone 11, iOS 26, Expo Go, November 7, 2026) | Pass |
 
 **Note on MZ-3:** the buttons' limits do not apply to `fitToCoordinates`, which frames a route automatically. Passing MZ-3 therefore depends on also setting a map-level zoom limit (`maxZoomLevel` on `MapView`). During implementation, the react-native-maps 1.29.11 documentation will be checked for whether `maxZoomLevel` is supported and enforced on our target platforms (iOS, and Android if tested). The expected result above stays as written. If the real map behaves differently, MZ-3 is recorded as Fail with an entry under [Discrepancies](#discrepancies), not by changing the expectation.
 
 **What the documentation and source showed (November 7, 2026; not verified on a device):** `71dfcd2` sets `maxZoomLevel={18}`. Zoom level 18 is roughly a `0.002`-wide view on a phone, but the exact match depends on screen width. react-native-maps 1.29.11 lists `maxZoomLevel` as supported on iOS and Android, but marks it deprecated on Apple Maps, which our iOS map uses. In its iOS code, the limit is applied only **after** the map finishes moving, by animating back to the limit. So on iPhone, a short route may briefly zoom in further than the limit before settling. MZ-3 will show whether that happens and how it looks. See [Discrepancies](#discrepancies), K-1.
+
+**How the manual results were obtained:** MZ-1 to MZ-4 were checked by hand on November 7, 2026, in Expo Go on iOS. **The application code tested was commit `71dfcd2`.** HEAD was `a0b5352` during testing, but that commit changed documentation only, so its app code is identical to `71dfcd2`. The results above are what the tester observed and reported. They are not automated test output. **Test environment:** a physical iPhone 11 running iOS 26, using Expo Go. These results apply to that one device. They don't show that every iPhone, screen size, or iOS version behaves the same way. In particular, MZ-4 asked for the smallest available iPhone screen. It was checked on the iPhone 11 (6.1-inch screen) only. Smaller screens, such as an iPhone SE, were not checked.
 
 **Note on MZ-2 B:** a delta of `0.2` is the limit for the **buttons**. Pinching can still zoom out further unless a map-level limit is also set; MZ-1 relies on that being possible.
 
@@ -212,6 +240,8 @@ The automated tests use a fake map, so they show that the app **asks** the map t
 They stop at the form's displayed pickup. They do not test `handleSaveDriver` in `App.js`, writing `pickup_lat`, `pickup_lng`, and `pickup_label` to Supabase, or displaying the ride on the Map tab. All four cases could pass while a saving bug still sends riders to the wrong place.
 
 I am leaving this out for now because a real test would need a test database or a fake version of it, and this assignment must not change Supabase records.
+
+**Partial manual observation (November 7, 2026):** in manual check GPS-6, one submitted ride kept its selected pickup, and the Map tab showed it correctly, on a physical iPhone 11 with iOS 26. That is one observation, not a repeatable test. The automated tests still don't cover this behavior, and the saved coordinates were not compared with the landmark's.
 
 Other gaps to keep in mind:
 
@@ -307,9 +337,11 @@ The current code suggests Step 2 will mainly affect the map files, `screens/MapS
 | --- | --- | --- | --- | --- | --- | --- |
 | Baseline, tests not yet committed | `d9ff1c06f644f16904627f0f990da544d3b3c22f` plus uncommitted `__tests__/`, `package.json`, and `package-lock.json` | Identical | November 4, 2026 | Automated | 5 passed, 0 failed | `test-results/baseline-d9ff1c0-uncommitted-tests.txt` |
 | Baseline, tests committed (official) | `0008c882df703c53caf1d291d4f0e733aaa22366` (short: `0008c88`) | Identical | November 4, 2026 | Automated | 1 suite passed; 5 tests passed, 0 failed; 0.578 s | `test-results/baseline-0008c88.txt` |
-| Manual checks | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Manual check defined in TC-02 A | App code of `71dfcd2` (HEAD was `a0b5352`, a documentation-only commit with identical app code) | Changed only by Step 2 | November 7, 2026 | Manual, user-observed, Expo Go on a physical iPhone 11 with iOS 26, as TC-02's method specifies | Pass | None (manual; results recorded in this plan) |
+| Manual checks defined in TC-01 and TC-04 (iOS Simulator) | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
 | After Step 2 (official; automated: TC-01 to TC-04, Z-01 to Z-09, R-01) | `71dfcd275fa0454f2b14a89d2221186f347a9a6c` (short: `71dfcd2`) | Changed only by Step 2: `screens/MapScreen.js` and new `lib/mapZoom.js`. Pickup files identical | November 7, 2026 | Automated | 2 suites passed; 16 tests passed, 0 failed; 0.772 s; exit status 0 | `test-results/after-step-2-71dfcd2.txt` |
-| Step 2 manual checks (MZ-1 to MZ-4) | Not Run | Not Run | Not Run | Not Run | Not Run | Not Run |
+| Additional GPS manual checks (GPS-1 to GPS-6) | App code of `71dfcd2` (HEAD was `a0b5352`, a documentation-only commit with identical app code) | Changed only by Step 2 | November 7, 2026 | Manual, user-observed, Expo Go on a physical iPhone 11 with iOS 26 | GPS-1 to GPS-6 Pass. No expected results recorded in advance | None (manual; results recorded in this plan) |
+| Step 2 manual checks (MZ-1 to MZ-4) | App code of `71dfcd2` (HEAD was `a0b5352`, a documentation-only commit with identical app code) | Changed only by Step 2 | November 7, 2026 | Manual, user-observed, Expo Go on a physical iPhone 11 with iOS 26 | MZ-1 Pass, MZ-2 Pass, MZ-3 Pass, MZ-4 Pass | None (manual; results recorded in this plan) |
 
 The first row cannot name a single commit that contains the tests, because they were not committed when it ran. The saved output records the SHA-256 of the test file: `97fa4d1a1ef82da49bfc9bb303beec570861914c84f0eb5423d7f1d09db33d39`. The "tests committed" row is the one to use as the before-Step-2 comparison.
 
@@ -379,18 +411,46 @@ A first attempt at the missing-ref bug changed only the helper `readyMap()`. Eac
 | Z-08 | Automated (unit) | N/A (added in Step 2) | A Pass, B Pass (`71dfcd2`) | |
 | Z-09 | Automated | N/A (added in Step 2) | Pass (`71dfcd2`) | |
 | R-01 | Automated (regression) | N/A (added in Step 2) | Pass (`71dfcd2`) | |
-| MZ-1 | Manual | N/A | Not Run | |
-| MZ-2 | Manual | N/A | Not Run | |
-| MZ-3 | Manual | N/A | Not Run | Depends on a map-level zoom limit; see the note under [Manual checks](#manual-checks) and K-1 under [Discrepancies](#discrepancies). |
-| MZ-4 | Manual | N/A | Not Run | |
+| MZ-1 | Manual | N/A | Pass (user-observed, iPhone 11, iOS 26) | |
+| MZ-2 | Manual | N/A | Pass (user-observed, iPhone 11, iOS 26) | Both A and B |
+| MZ-3 | Manual | N/A | Pass (user-observed, iPhone 11, iOS 26) | Depends on a map-level zoom limit; see the note under [Manual checks](#manual-checks) and K-1 under [Discrepancies](#discrepancies). |
+| MZ-4 | Manual | N/A | Pass (user-observed, iPhone 11, iOS 26) | Checked on the iPhone 11's 6.1-inch screen only; smaller screens not checked |
+
+**GPS manual checks defined in the test cases.** These were not run at the baseline.
+
+| Check | Method specified | Baseline | After Step 2 | Notes |
+| --- | --- | --- | --- | --- |
+| TC-01 manual | iOS Simulator, custom location | Not Run | Not Run | |
+| TC-02 A manual | iPhone, permission set to Never | Not Run | Pass (user-observed, physical iPhone 11, iOS 26) | The button state and "no position read" were not reported |
+| TC-04 manual | iOS Simulator, custom location | Not Run | Not Run | |
+
+**Additional GPS manual checks.** These were not defined before testing and were not run at the baseline, so there is no before-and-after comparison.
+
+| Check | Type | Baseline | After Step 2 | Notes |
+| --- | --- | --- | --- | --- |
+| GPS-1 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | Chosen landmark and tester's position not recorded |
+| GPS-2 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | |
+| GPS-3 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | |
+| GPS-4 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | Not the same as TC-02 A's manual check; see D-1 |
+| GPS-5 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | |
+| GPS-6 | Manual | Not run | Pass (user-observed, iPhone 11, iOS 26) | One observation of part of the uncovered behavior |
 
 ## Discrepancies
 
 Each case where an actual result differs from its expected result gets an entry here: the test, what was expected, what happened, the cause, and whether the fault was in the app or the test. Expected results are never edited to match what happened.
 
-**Official runs:** in the official after-Step-2 run at `71dfcd2`, every automated actual result matched its recorded expected result. No expected result was changed. The manual checks MZ-1 to MZ-4 have not been run, so they can't be compared yet.
+**Official runs:** in the official after-Step-2 run at `71dfcd2`, every automated actual result matched its recorded expected result. No expected result was changed. The manual checks MZ-1 to MZ-4 also matched their expected results when checked by hand (user-observed on a physical iPhone 11 with iOS 26, in Expo Go). For MZ-3, strict `maxZoomLevel` enforcement remains unverified (K-1).
 
 The items below are not mismatches in the official run. They are recorded so the full history is visible.
+
+### D-1: The GPS manual checks performed don't match the ones the plan defined
+
+| Field | Details |
+| --- | --- |
+| **What the plan defined** | Three manual repeats, each with an "Actual result" and a "Status" field (six "Not Run" entries in all):<br>**TC-01:** iOS Simulator, custom location `32.8446, -96.7836`. Expects Fondren Library, an exact info message, and no Try Again or Open Settings.<br>**TC-02 A:** iPhone, permission set to Never, with Hughes-Trigg already selected. Expects Hughes-Trigg kept, an exact warning, and Try Again plus Open Settings.<br>**TC-04:** iOS Simulator, custom location `32.8597, -96.7849`, with Moody Coliseum selected. Expects Moody kept, the "more than about 1.5 km" warning, and no Try Again. |
+| **What was performed** | GPS-1 to GPS-6, on a physical iPhone 11 at the tester's real location, with no expected results recorded in advance. |
+| **Mismatch** | No GPS check uses TC-01's or TC-04's simulated locations, or checks their exact landmark and message. GPS-4 is the closest to TC-02 A, but it checked only that the app didn't crash and that manual selection still worked. It didn't check that an existing pickup was kept, the warning text, or the buttons. |
+| **How it is recorded** | The TC-01 and TC-04 manual checks stay **Not Run**, and their test cases are unchanged. TC-02 A's own manual check was later done as specified (on an iPhone) and passed. It is recorded in TC-02, not as GPS-4. GPS-1 to GPS-6 are recorded separately under [Additional GPS manual checks](#additional-gps-manual-checks-user-observed). |
 
 ### T-1: Six Step 2 tests failed on their first run because of a test bug
 
@@ -413,7 +473,7 @@ The Step 2 method description said only `react-native-maps` and `fetchDrivingRou
 | **Affects** | MZ-3 (short route framing), and the closest-in limit when pinching. The Zoom in button's own limit (Z-03) is not affected. |
 | **What is known** | `71dfcd2` sets `maxZoomLevel={18}` on the Map tab's `MapView`. react-native-maps 1.29.11 marks `maxZoomLevel` as deprecated on Apple Maps. Its iOS code applies the limit only after the map stops moving, by animating back. Apple Maps is the iOS map this app uses. Level 18 matches the buttons' `0.002` limit only roughly, depending on screen width. |
 | **Possible effect** | On iPhone, a route between two close points (such as Hughes-Trigg to Fondren) may briefly zoom in closer than the limit, then settle back to it. On a wide screen, the map's limit and the buttons' limit may not match exactly. |
-| **Verified?** | **No.** This comes from reading the library's documentation and source code. No device or simulator check has been done. MZ-3 stays Not Run, and its expected result is unchanged. If MZ-3 fails, it will be recorded as Fail with the observed behavior. |
+| **Verified?** | **Partly.** The limitation itself comes from reading the library's documentation and source code. On November 7, 2026, MZ-3 passed when checked by hand on a physical iPhone 11 (iOS 26): the short route displayed correctly with both endpoints visible. A brief native zoom past the limit was not independently checked, so the result neither confirms nor rules out an overshoot, and strict `maxZoomLevel` enforcement remains unverified. It was checked on one device only: a physical iPhone 11 with iOS 26, in Expo Go. MZ-3's expected result is unchanged. |
 | **Not used** | `cameraZoomRange` is a hard limit on iOS 13 and later, but react-native-maps does not support it on Android. It was not used, to keep to the planned design. |
 
 ### U-1: Behavior added but not covered by a test
