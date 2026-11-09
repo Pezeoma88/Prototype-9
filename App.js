@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, Keyboard, Linking, Platform, View } from 'react-native';
+import { Alert, BackHandler, Keyboard, Linking, Platform, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from './lib/supabase';
 import {
@@ -35,6 +35,7 @@ import {
   withdrawRideRequest,
 } from './lib/rideRequests';
 import { DEFAULT_RIDE_FILTERS, filterAndSortRides } from './lib/rideFilters';
+import { isMessagingEnabled, listRideConversations, openRideConversation } from './lib/messaging';
 import {
   RIDE_CLOCK_INTERVAL_MS,
   isRideDeparted,
@@ -60,6 +61,7 @@ import RequestsScreen from './screens/RequestsScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import EditProfileScreen from './screens/EditProfileScreen';
 import OnboardingScreen from './screens/OnboardingScreen';
+import ConversationScreen from './screens/ConversationScreen';
 
 // Phase 1A layout: constants/helpers live in lib/format.js and lib/board.js,
 // screens live in screens/, shared UI in components/, and design tokens in
@@ -373,6 +375,33 @@ export default function App() {
   // The id of the driver whose Ride Details screen is currently open, or null if none.
   const [selectedRideDriverId, setSelectedRideDriverId] = useState(null);
 
+  // Private driver/rider messaging (Prototype 9). Everything below is used
+  // only when EXPO_PUBLIC_MESSAGING_ENABLED is exactly 'true'
+  // (lib/messaging.js). Otherwise no messaging control is shown and no
+  // messaging request is ever made: every loader and handler checks the
+  // flag first, and the screens get messagingEnabled={false}.
+  //
+  // The server decides everything about a chat: who may open one
+  // (open_my_ride_conversation) and whether it accepts messages (can_send,
+  // read live by the conversation screen). The app never authorizes from
+  // its own clock.
+  const messagingEnabled = isMessagingEnabled();
+  // The conversation open full-screen (the tab bar is hidden meanwhile), or
+  // null: { id, otherPersonId }. The other person's name and photo are
+  // looked up from the board's profiles when shown.
+  const [openConversation, setOpenConversation] = useState(null);
+  // The Messages list on the Requests tab: the server's rows, or null until
+  // the first load. A failed reload keeps the rows already shown.
+  const [conversationRows, setConversationRows] = useState(null);
+  const [conversationsError, setConversationsError] = useState('');
+  // The Message button whose chat is being opened ({ rideId, riderId }), so
+  // it can show a spinner; the ref is the double-tap guard.
+  const [openingMessage, setOpeningMessage] = useState(null);
+  const openingMessageRef = useRef(false);
+  // Bumped per Messages-list load and on sign-out, so only the newest
+  // answer for the current person is applied.
+  const conversationsLoadRef = useRef(0);
+
   // Loads the whole board from Supabase: rides, their pending/accepted
   // requests, and the profiles those rows point at. On failure the rides
   // already on screen are kept and an error message is shown instead.
@@ -561,10 +590,62 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser, profileLoadAttempt, loadBoard]);
 
+  // Loads the Messages list (list_my_ride_conversations). Does nothing when
+  // messaging is off or nobody is signed in.
+  const loadConversations = useCallback(async () => {
+    const userId = currentUserIdRef.current;
+    if (!isMessagingEnabled() || !userId) {
+      return;
+    }
+    conversationsLoadRef.current += 1;
+    const attempt = conversationsLoadRef.current;
+    const result = await listRideConversations();
+    // Skip a late answer: someone else signed in (or out), or a newer load
+    // started meanwhile.
+    if (currentUserIdRef.current !== userId || conversationsLoadRef.current !== attempt) {
+      return;
+    }
+    if (result.kind === 'ok') {
+      setConversationRows(result.conversations);
+      setConversationsError('');
+    } else {
+      setConversationRows((current) => current ?? []);
+      setConversationsError(result.message);
+    }
+  }, []);
+
+  // The Messages list is (re)loaded each time the Requests tab is shown,
+  // including on returning from a conversation, so it reflects the latest
+  // activity and read-only states.
+  const currentUserId = currentUser ? currentUser.id : null;
+  const isRequestsTabShowing = activeTab === 'requests' && openConversation === null;
+  useEffect(() => {
+    if (messagingEnabled && currentUserId !== null && isRequestsTabShowing) {
+      loadConversations();
+    }
+  }, [messagingEnabled, currentUserId, isRequestsTabShowing, loadConversations]);
+
+  // Android's back button leaves an open conversation, like its Back button.
+  const isConversationOpen = openConversation !== null;
+  useEffect(() => {
+    if (!isConversationOpen) {
+      return undefined;
+    }
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setOpenConversation(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [isConversationOpen]);
+
   // Pull-to-refresh: fetch the latest board without restarting the app.
+  // On the Requests tab the Messages list is refreshed too (messaging on).
   async function handleRefresh() {
     setIsRefreshing(true);
-    await loadBoard();
+    await Promise.all([
+      loadBoard(),
+      messagingEnabled && activeTab === 'requests' ? loadConversations() : null,
+    ]);
     setIsRefreshing(false);
   }
 
@@ -614,6 +695,13 @@ export default function App() {
     setRideFilters(DEFAULT_RIDE_FILTERS);
     setToast(null);
     setActiveTab('home');
+    // Messaging: close any open chat (which stops its polling) and forget
+    // the Messages list; a load still in flight is ignored when it lands.
+    conversationsLoadRef.current += 1;
+    setOpenConversation(null);
+    setConversationRows(null);
+    setConversationsError('');
+    setOpeningMessage(null);
   }
 
   // Shows a short floating confirmation (see components/Toast.js).
@@ -2040,6 +2128,64 @@ export default function App() {
     setActiveTab('home');
   }
 
+  // The other participant's profile id in a conversation from the server.
+  function getOtherPersonId(conversation) {
+    return conversation.myRole === 'driver' ? conversation.riderId : conversation.driverId;
+  }
+
+  // A Message button (Ride Details or the Requests tab): finds or starts
+  // the chat for that ride with open_my_ride_conversation, then opens it.
+  // A rider passes riderId null: the server takes them from the session.
+  // If the server refuses (e.g. the seat was just cancelled, or the ride
+  // has ended), its reason is shown and nothing opens.
+  async function handleMessage({ rideId, riderId = null }) {
+    if (!messagingEnabled || !currentUser || openingMessageRef.current) {
+      return;
+    }
+    const userId = currentUser.id;
+    openingMessageRef.current = true;
+    setOpeningMessage({ rideId, riderId });
+    setRequestNotice('');
+    try {
+      const result = await openRideConversation({ rideId, riderId });
+      if (currentUserIdRef.current !== userId) {
+        return;
+      }
+      if (result.kind === 'ok') {
+        Keyboard.dismiss();
+        setOpenConversation({
+          id: result.conversation.id,
+          otherPersonId: getOtherPersonId(result.conversation),
+        });
+      } else {
+        setRequestNotice(result.message);
+      }
+    } finally {
+      openingMessageRef.current = false;
+      setOpeningMessage(null);
+    }
+  }
+
+  // A row in the Messages list: opens that chat by id, read-only or not.
+  function handleOpenConversation(conversationId) {
+    if (!messagingEnabled) {
+      return;
+    }
+    const row = (conversationRows || []).find((item) => item.id === conversationId);
+    Keyboard.dismiss();
+    setRequestNotice('');
+    setOpenConversation({
+      id: conversationId,
+      otherPersonId: row ? getOtherPersonId(row) : null,
+    });
+  }
+
+  // The conversation's Back: returns to the tab (and Ride Details) it was
+  // opened from, which were kept as they were.
+  function handleCloseConversation() {
+    setOpenConversation(null);
+  }
+
   // Reading the saved session at launch, or loading the profile of the
   // person who just signed in.
   if (authUser === undefined || (authUser !== null && currentUser === null && !isRecoveringPassword)) {
@@ -2146,6 +2292,43 @@ export default function App() {
         driverReviews={detailsDriverReviews}
         reviewEligibility={detailsReviewEligibility}
         handleSubmitReview={handleSubmitReview}
+        messagingEnabled={messagingEnabled}
+        nowMs={nowMs}
+        onMessage={handleMessage}
+        openingMessage={openingMessage}
+      />
+    ) : null;
+
+  // The Messages list rows with the other person's name and photo, when
+  // the board has their profile ("Your driver" / "Your rider" otherwise).
+  const conversationsForList = messagingEnabled
+    ? (conversationRows || []).map((conversation) => {
+        const otherId = getOtherPersonId(conversation);
+        return {
+          ...conversation,
+          otherPersonName: profilesById[otherId]?.name || null,
+          otherPersonAvatarUrl: getBoardAvatarUrl(profilesById, otherId),
+        };
+      })
+    : [];
+
+  const conversationView =
+    messagingEnabled && openConversation !== null ? (
+      <ConversationScreen
+        key={openConversation.id}
+        conversationId={openConversation.id}
+        currentUser={currentUser}
+        otherPersonName={
+          openConversation.otherPersonId
+            ? profilesById[openConversation.otherPersonId]?.name || undefined
+            : undefined
+        }
+        otherPersonAvatarUrl={
+          openConversation.otherPersonId
+            ? getBoardAvatarUrl(profilesById, openConversation.otherPersonId)
+            : null
+        }
+        onBack={handleCloseConversation}
       />
     ) : null;
 
@@ -2202,7 +2385,14 @@ export default function App() {
       <View style={appStyles.shell}>
         <StatusBar style={statusBarStyle()} />
 
-        <View style={appStyles.screen}>
+        {/* While a conversation is open it covers everything, and the tabs
+            underneath stay mounted (so Back returns to exactly where the
+            user was) but hidden from screen readers. */}
+        <View
+          style={appStyles.screen}
+          accessibilityElementsHidden={conversationView !== null}
+          importantForAccessibility={conversationView !== null ? 'no-hide-descendants' : 'auto'}
+        >
           {activeTab === 'home' ? (
             <HomeScreen
               currentUser={currentUser}
@@ -2273,6 +2463,13 @@ export default function App() {
                   reviewsLoaded={reviewRows !== null}
                   onOpenRide={handleOpenRideFromTab}
                   onGoHome={handleGoHome}
+                  messagingEnabled={messagingEnabled}
+                  conversations={conversationsForList}
+                  conversationsError={conversationsError}
+                  isConversationsLoading={conversationRows === null}
+                  onMessage={handleMessage}
+                  onOpenConversation={handleOpenConversation}
+                  openingMessage={openingMessage}
                 />
               )}
               {activeTab === 'profile' &&
@@ -2316,11 +2513,14 @@ export default function App() {
         </View>
 
         <DemoNetworkBanner />
-        <TabBar
-          activeTab={activeTab}
-          onTabPress={handleTabPress}
-          badges={{ requests: incomingRequestCount }}
-        />
+        {conversationView === null && (
+          <TabBar
+            activeTab={activeTab}
+            onTabPress={handleTabPress}
+            badges={{ requests: incomingRequestCount }}
+          />
+        )}
+        {conversationView !== null && <View style={appStyles.conversation}>{conversationView}</View>}
       </View>
     </SafeAreaProvider>
   );
@@ -2336,6 +2536,14 @@ const appStyles = createThemedStyles(() => ({
   },
   tabScreen: {
     flex: 1,
+    backgroundColor: colors.bg,
+  },
+  conversation: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.bg,
   },
   launch: {

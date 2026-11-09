@@ -8,6 +8,9 @@ import { colors, createThemedStyles, radius, spacing } from '../theme/theme';
 //   destructive soft red, for cancelling a ride / leaving a seat
 //   rider       filled teal, for Rider-specific primary actions
 // Disabled buttons use a light gray fill regardless of variant.
+// accessibilityLabel is optional: without it, screen readers read `title`
+// (unchanged from before). Pass one when several buttons share a title,
+// e.g. "Message" next to each passenger.
 // Built per render so the colors follow the Light/Dark setting.
 function getVariants() {
   return {
@@ -27,6 +30,7 @@ export default function AppButton({
   loading = false,
   size = 'md',
   style,
+  accessibilityLabel,
 }) {
   const variants = getVariants();
   const v = variants[variant] || variants.primary;
@@ -38,6 +42,7 @@ export default function AppButton({
       onPress={onPress}
       disabled={isDisabled}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: isDisabled }}
       style={({ pressed }) => [
         styles.base,

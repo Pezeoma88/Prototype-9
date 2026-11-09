@@ -8,6 +8,8 @@
 
 **Step 2 (map zoom controls):** test cases and expected results recorded on November 7, 2026, **before** any Step 2 code was written. See [Step 2 test cases](#step-2-test-cases-map-zoom-controls). Step 2 was then implemented in commit `71dfcd2`. All automated Step 2 tests passed there. The manual checks MZ-1 to MZ-4 passed when checked by hand on a physical iPhone 11 (iOS 26, Expo Go) on November 7, 2026, against app code `71dfcd2`. These are user-observed results, not automated tests.
 
+**Private driver/rider messaging:** test cases and expected results recorded on November 8, 2026, on branch `feature/ride-messaging`, **before** any messaging app code was written (Messaging Step 1). 119 new automated tests in 3 files. Before implementation: 10 pass, 10 fail, and 99 can't run because their files import messaging code that doesn't exist yet. Every failure is expected. **Messaging Step 3 (data layer):** `lib/messaging.js` was implemented and `expo-crypto` 58.0.7 installed. All 74 data-layer tests pass, including one added in Step 3 (see M-2), and the 16 earlier tests still pass. See [Run log](#run-log). **Messaging Step 4 (conversation screen):** `screens/ConversationScreen.js` was built as an isolated screen and is not yet connected to `App.js`. All 26 conversation-screen tests pass after two test-timing corrections (see T-2). One app bug was found and fixed outside the suite (see A-2). The 16 earlier tests still pass. See [Messaging test cases](#messaging-test-cases-private-driverrider-messaging).
+
 | Deadline | Requirement |
 | --- | --- |
 | Thursday, November 5 | Record the test cases in the repository and discuss them in lab |
@@ -233,6 +235,217 @@ The automated tests use a fake map, so they show that the app **asks** the map t
 
 **Note on MZ-2 B:** a delta of `0.2` is the limit for the **buttons**. Pinching can still zoom out further unless a map-level limit is also set; MZ-1 relies on that being possible.
 
+## Messaging test cases: private driver/rider messaging
+
+These cases were written on November 8, 2026, on branch `feature/ride-messaging` (created from `main` at `8ad3533`), **before any messaging app code existed**. The expected results are predictions. They test a new feature, so they have no baseline result.
+
+The database side is `supabase/messaging-1-tables.sql`, checked by `supabase/messaging-2-verify.sql`. It has been applied and tested **only on a local database**. It is **not** in production. These tests don't change or connect to any database, and no database file was changed.
+
+### How messaging will work (planned)
+
+This is the design the expected results are based on. If the implementation has to differ, the difference will be recorded under [Discrepancies](#discrepancies), not hidden by editing these expectations.
+
+**Off switch.** Messaging is controlled by `EXPO_PUBLIC_MESSAGING_ENABLED`. It is on only when the value is exactly `"true"`. Anything else, including not set, means off.
+- `isMessagingEnabled()` in `lib/messaging.js` reads the flag as `process.env.EXPO_PUBLIC_MESSAGING_ENABLED`, because Expo only inlines that dot-notation form.
+- `App.js` passes the result to the screens as the `messagingEnabled` prop. A screen given no value treats messaging as off.
+- When messaging is off, there are no Message buttons, no Messages list and no messaging requests.
+
+**Data layer (`lib/messaging.js`).** It uses the existing shared client from `lib/supabase.js`, which holds only the publishable key. Its functions never throw; each resolves with a result object. The server calls are copied from `messaging-1-tables.sql`:
+
+| Function | Server call | Success result |
+| --- | --- | --- |
+| `openRideConversation({ rideId, riderId })` | RPC `open_my_ride_conversation` with `p_ride_id`. `p_rider_id` is added only when a driver names the rider; a rider sends no rider id. | `{ kind: 'ok', conversation }` |
+| `listRideConversations()` | RPC `list_my_ride_conversations` with no arguments | `{ kind: 'ok', conversations }`, in the server's order (newest activity first) |
+| `getRideConversation(conversationId)` | RPC `list_my_ride_conversations` with `p_conversation_id` | `{ kind: 'ok', conversation }`, or `conversation: null` when no row comes back |
+| `sendRideMessage({ conversationId, clientMessageId, body })` | RPC `send_my_ride_message` with `p_conversation_id`, `p_client_message_id` and `p_body` (trimmed) | `{ kind: 'ok', message }` |
+| `loadMessages({ conversationId, since })` | There is no RPC for reading messages. It reads the `ride_messages` table, which RLS limits to the conversation's participants: `conversation_id` = the conversation, plus `created_at` ≥ `since` when `since` is given | `{ kind: 'ok', messages }`, oldest first (ties broken by id) |
+| `newClientMessageId()` | None. It returns `Crypto.randomUUID()` from `expo-crypto`. | A UUID v4 string |
+
+The app never calls `ride_conversation_state`; it is used inside the server.
+
+- **Conversation shape:** `{ id, rideId, driverId, riderId, myRole, rideDestination, rideDepartureAt, state, canSend, createdAt, lastMessageAt }`, from the RPC's columns.
+  - `rideDepartureAt` is a `Date`.
+  - `canSend` is true only when `can_send` is true.
+  - `rideId` is null for a cancelled ride's archived chat.
+- **Message shape:** `{ id, conversationId, senderId, clientMessageId, body, createdAt }`.
+
+**Failures.** Every failure resolves to a result the screen can show:
+
+| What happened | Result `kind` | Message |
+| --- | --- | --- |
+| Error `P0001` (a rule the database enforces, such as a read-only chat or the rate limit) | `refused` | The server's own message, which is written for users |
+| Error `55P03` (the ride is being updated) | `retry` | The server's own message |
+| `PGRST202`, `PGRST205`, `42883` or `42P01` (messaging isn't installed on this server, as in production today) | `unavailable` | "Messaging isn't available yet." |
+| Status 0 (how supabase-js 2.117 reports a network failure) or a thrown error | `retry` | "Couldn't reach CarpoolBoard. Check your connection and try again." |
+| Anything else | `error` | "Something went wrong. Please try again." |
+| Send: an empty message, or only spaces, tabs and newlines | `invalid` (nothing is sent) | "Type a message first." |
+| Send: more than 1,000 characters | `invalid` (nothing is sent) | "Messages can be at most 1000 characters." |
+
+Characters are counted the way the database counts them, so 1,000 emoji are allowed even though JavaScript counts them as 2,000.
+
+**Retries.** A message gets its id from `newClientMessageId()` once, when it is first sent. Retry reuses that same id, and the data layer never creates its own. For a repeated id, the server returns the message it already saved instead of saving a second copy.
+
+**Conversation screen (`screens/ConversationScreen.js`).** Its props are `conversationId`, `currentUser`, `otherPersonName` and `onBack`.
+
+*Layout:*
+- A **Back** button, and a header with the other person's name and the ride's destination.
+- Bubbles, oldest first. Each bubble's accessibility label is "*You* or *name*, *time*: *text*", where the time looks like "3:05 PM". Day labels read "Today", "Yesterday", or the date.
+- The composer (a text input labeled "Type a message" and a **Send** button) appears **only when `canSend` is true**. `canSend` comes from the server, so the server alone decides whether sending is allowed.
+- **Send** is disabled when the message is blank or over 1,000 characters, and an over-length message shows the limit message.
+
+*Read-only notices* replace the composer when `canSend` is false, and the history stays visible:
+- `ride_cancelled`: "This ride was cancelled, so this conversation is read-only."
+- `seat_cancelled`: "This seat is no longer confirmed, so this conversation is read-only."
+- `completed`: "This ride has ended, so this conversation is read-only."
+- Any other state: "This conversation is read-only."
+
+These match the server's own wording.
+
+*Sending:*
+- The message appears at once marked "Sending…", and the composer clears.
+- On success it is replaced by the server's copy.
+- A `retry` or `error` result marks it "Not sent", with a **Retry** button.
+- A `refused` result shows the server's reason and re-reads the conversation straight away, so the chat turns read-only without waiting for the next poll.
+- A message is never shown twice, even if a poll and a send result both return it. Messages are matched by id, or by client id for the user's own messages.
+
+*Polling:*
+- Every 5 seconds while the screen is open **and** the app is active, it loads new messages and re-reads the conversation.
+- Each poll asks for messages from no later than the newest message already shown. This matters because `created_at` is the time a transaction started, so a message can be saved after a newer one.
+- There is no polling in the background. Returning to the app checks at once.
+- Leaving the screen stops polling.
+- A new poll never starts while the previous one is still running.
+- A failed poll keeps the messages on screen.
+
+*When there is no conversation to show:*
+- An `unavailable` result shows "Messaging isn't available yet."
+- A conversation that comes back `null` shows "This conversation isn't available."
+- Neither case shows a composer.
+
+**Message buttons.** These are new props on existing screens. Existing buttons and handlers don't change.
+
+- **Ride Details, driver** (when `isOwnerDriver` is true): one button per confirmed rider, named "Message *rider*". It calls `onMessage({ rideId, riderId })`.
+- **Ride Details, accepted rider:** one button on their own passenger row, named "Message *driver*". It calls `onMessage({ rideId, riderId: null })`. Other passengers' rows get no button.
+- **Requests tab, rider:** on each Confirmed card. **Requests tab, driver:** on each confirmed passenger.
+- **Never** for pending, denied or cancelled requests.
+- Buttons are shown until **2 hours after departure** (while now < departure + 2 h), matching the server's grace period. After that, the chat is reached from the Messages list.
+- `AppButton` gets an optional `accessibilityLabel` prop, so that each Message button has its own name.
+- Ride Details also gets `nowMs`.
+
+**Messages list.** It sits at the top of the Requests tab, in both modes, above everything else, including the existing empty states.
+- It is titled "Messages".
+- Each row is a button whose name starts "Conversation with *name*" and which shows the ride's destination.
+- A conversation with `canSend` false shows "Read-only".
+- Tapping a row calls `onOpenConversation(conversationId)`. This is how archived chats stay reachable after their ride is deleted or the rider leaves.
+- With no conversations it shows "No conversations yet." If the list couldn't be loaded, it shows `conversationsError`.
+- `App.js` loads the list with `listRideConversations()` and adds `otherPersonName` to each row.
+
+### Automated tests
+
+**Files:** `__tests__/messaging-data-test.js` (MD), `__tests__/messaging-conversation-test.js` (MC) and `__tests__/messaging-entry-points-test.js` (ME).
+
+**Method:** Jest and React Native Testing Library, as for the earlier tests. Expected values are written out in the test files, not imported from the app. The RPC names, argument names and columns were copied by hand from `messaging-1-tables.sql`.
+
+| File | Real code under test | Faked |
+| --- | --- | --- |
+| MD | `lib/messaging.js` | `lib/supabase`: a fake client that records each `rpc`/`from` call and returns a scripted result. Network failures use supabase-js's real shape (`status: 0`, empty code). `expo-crypto` is faked as a virtual module because it isn't installed yet. `fetch` is replaced by a counter that must stay at 0. |
+| MC | `screens/ConversationScreen.js` and everything it uses | `lib/messaging` (tested separately in MD; faking it here means no Supabase client exists at all), the icon font, `AppState`, and the clock (Jest fake timers fixed at Sunday, November 8, 2026, 4:00 PM, with the tests running in `America/Chicago`) |
+| ME | `screens/RideDetailsScreen.js` and `screens/RequestsScreen.js` | `lib/supabase` (RequestsScreen loads it through `lib/reviews`), `react-native-maps`, and the icon font |
+
+No test can reach a Supabase project, local or production.
+
+#### MD: data layer
+
+| ID | Purpose | Setup and action | Expected result |
+| --- | --- | --- | --- |
+| MD-01 | A rider opens their chat | Fake server returns one conversation row. Call `openRideConversation({ rideId: 'ride-1' })`. | One RPC call: `open_my_ride_conversation` with `p_ride_id: 'ride-1'` and no rider id. Result is `ok` with the conversation in the shape above. No table read. |
+| MD-02 | A driver opens the chat with one rider | `openRideConversation({ rideId: 'ride-1', riderId: 'rider-a' })` | Arguments are exactly `{ p_ride_id: 'ride-1', p_rider_id: 'rider-a' }`. Result is `ok`. |
+| MD-03 | List all chats | Fake server returns an open row, then an archived row (`ride_id` null, `ride_cancelled`). Call `listRideConversations()`. | `list_my_ride_conversations` with no arguments. Both conversations, in the server's order, with `rideId` null on the archived one. |
+| MD-04 | Read one chat by id | **A:** one row. **B:** no rows. | `list_my_ride_conversations` with `{ p_conversation_id }`. **A:** that conversation. **B:** `conversation: null`. |
+| MD-05 | Send a message | **A:** body `"  On my way \n"`, single-object answer. **B:** a one-row array answer. | `send_my_ride_message` with exactly `p_conversation_id`, `p_client_message_id` and `p_body: 'On my way'`. The result is the message in the shape above, for both answers. |
+| MD-06 | Read message history | **A:** the server returns 4 rows newest first, two with the same time. **B:** `since: '2026-11-08T21:04:00.000Z'`. | **A:** reads table `ride_messages` (no RPC), selecting all six columns, filtered by `conversation_id`. Result oldest first, with the tie broken by id: `msg-1`, `msg-2a`, `msg-2b`, `msg-3`. **B:** also filters `created_at` ≥ that time. |
+| MD-07 | States and `can_send` passed through | Each of `open`/`true`, `ride_cancelled`/`false`, `seat_cancelled`/`false` and `completed`/`false`. Plus `can_send: null`. *Added in Step 3:* state `open` with `can_send: false`. | `state` and `canSend` match the server. A null `can_send` becomes `false`. *Added:* `canSend` stays `false` while `state` stays `open`. |
+| MD-08 | Every failure becomes a result, never a throw | For each of the 4 RPC functions, the 9 failures in the [failures table](#how-messaging-will-work-planned) (`P0001`, `55P03`, `PGRST202`, `PGRST205`, `42883`, `42P01`, status 0, a thrown error, `42501`). For `loadMessages`, the 5 that a table read can produce. | The `kind` and message from the failures table (36 + 5 cases) |
+| MD-09 | Length and empty checks happen on the phone | **A** `""`, **B** whitespace only, **C** 1,001 characters, **D** `null`: all refused. **E** exactly 1,000 characters, **F** 1,000 emoji, **G** 1,000 characters with spaces around them: all sent. | **A–D:** `invalid` with the matching message and **no** server call. **E–G:** sent, and G's body is trimmed to the 1,000 characters. |
+| MD-10 | Retries reuse the client id | **A:** the same message is sent twice; the first attempt fails with a network error. **B:** `newClientMessageId()` called twice. | **A:** both RPC calls are identical, with `p_client_message_id: 'client-1'`. `randomUUID` is never called by `sendRideMessage`. **B:** each call returns the next fake UUID. |
+| MD-11 | Pending or denied riders get no chat | The server refuses with `P0001` "This conversation isn't available." | `refused` with that message, and no conversation in the result |
+| MD-12 | Flag is off unless exactly `"true"` | Unset, `""`, `"false"`, `"1"` and `"TRUE"`; then `"true"`. Each uses a fresh copy of the module. | Off for the first five, on only for `"true"` |
+| MD-13 | Safety | **A:** read the source of `lib/messaging.js`. **B:** last test in the file. | **A:** it imports from `./supabase`, never calls `createClient`, and never mentions a service-role key or secret. **B:** no test made a network request. |
+
+#### MC: conversation screen
+
+| ID | Purpose | Setup and action | Expected result |
+| --- | --- | --- | --- |
+| MC-01 | History, bubbles, times | Open chat with 3 messages: Dana yesterday at 5:30 PM, me today at 3:05 PM, Dana today at 3:06 PM | Loads conversation `conv-1` and its messages. Bubble labels in order: "Dana Driver, 5:30 PM: …", "You, 3:05 PM: …", "Dana Driver, 3:06 PM: …". "Yesterday" and "Today" are shown, along with the name and "Downtown Dallas". The composer is shown. |
+| MC-02 | Archived chats are read-only | `ride_cancelled`, `seat_cancelled` or `completed`, each with `canSend` false; then `open` | Each archived state shows its notice, has no input and no Send button, and keeps its history. `open` shows the composer and no notice. |
+| MC-03 | `can_send` decides | **A:** state `open` with `canSend` false. **B:** state `completed` with `canSend` true. | **A:** no composer, and "This conversation is read-only." **B:** composer shown. |
+| MC-04 | Sending | Type `"  On my way  "`, tap Send, and hold the server's answer | Sent once with `{ conversationId: 'conv-1', clientMessageId: 'client-new-1', body: 'On my way' }`. The input clears, and "On my way" plus "Sending…" show at once. After the answer: no "Sending…", one bubble, labeled "You, 3:59 PM: On my way". |
+| MC-05 | Empty messages | Nothing typed; then only spaces and newlines | Send is disabled both times, and pressing it sends nothing |
+| MC-06 | Length limit | 1,000 characters; then 1,001 | 1,000: Send enabled, no limit message. 1,001: Send disabled, the limit message shown, nothing sent. |
+| MC-07 | Retry reuses the id | First send gets a network `retry`; Retry succeeds | "Not sent" and a Retry button appear. The second send is identical, including `client-new-1`. A new id was created only once. Afterward there is no "Not sent" and exactly one bubble. |
+| MC-08 | No duplicate sends | **A:** two fast taps on Send. **B:** the next poll returns the message just sent. **C:** a "Not sent" message turns up in a poll (the reply was lost, but the server had saved it). | **A:** one send call and one bubble. **B:** still one bubble. **C:** "Not sent" and Retry disappear, leaving one bubble with the server's time. |
+| MC-09 | Refused send | Send is refused because the ride was cancelled; re-reading the conversation returns `ride_cancelled` | The conversation is re-read at once, without waiting for a poll. The server's reason is shown and the composer disappears. |
+| MC-10 | Polling lifecycle | **A:** timing. **B:** where a poll starts reading. **C:** a new incoming message. **D:** a poll finds the seat cancelled. **E:** background, then return. **F:** leave the screen. **G:** a poll that never answers. **H:** a failed poll. | **A:** nothing at 4,999 ms. At 5,000 ms messages and conversation are both re-read, and again 5 s later. **B:** `since` is no later than the newest message held. **C:** the new bubble appears. **D:** the chat turns read-only and keeps its history. **E:** no polls in 20 s of background; one poll at once on return, then every 5 s. **F:** no more polls, and the app-state listener is removed. **G:** no second poll starts while the first is running. **H:** history stays and polling continues. |
+| MC-11 | Nothing to show | **A:** `unavailable`. **B:** `conversation: null`. | **A:** "Messaging isn't available yet." **B:** "This conversation isn't available." Neither has a composer. |
+| MC-12 | Back | Tap **Back** | `onBack` is called once |
+
+#### ME: entry points
+
+| ID | Purpose | Setup and action | Expected result |
+| --- | --- | --- | --- |
+| ME-01 | Flag off (prop left out) | **A:** Ride Details as the driver. **B:** Ride Details as the accepted rider. **C:** the Requests tab as the rider, with conversations passed in. **D:** the Requests tab as the driver. | No Message button, no "Messages" heading and no conversation rows. Existing buttons are still there: Accept, Deny, Edit Ride, Cancel Ride, Leave, Leave Seat, Withdraw. |
+| ME-02 | Driver, Ride Details | A ride with confirmed riders Riley and Bo, and pending rider Pat | Buttons "Message Riley Rider" and "Message Bo Rider", in that order. Bo's calls `onMessage({ rideId: 'ride-1', riderId: 'rider-b' })`. Edit Ride is still there. |
+| ME-03 | Accepted rider, Ride Details | Riley in Rider mode | Only "Message Dana Driver", which calls `onMessage({ rideId: 'ride-1', riderId: null })`. Leave is still there. |
+| ME-04 | Pending and denied riders can't message | **A:** the driver's view of pending Pat. **B:** Ride Details for a rider whose request is pending, denied or cancelled. | **A:** no "Message Pat Pending", and Accept is still there. **B:** no Message button. |
+| ME-05 | Rider, Requests tab | One request in each status | Only "Message Dana Driver", on the Confirmed request, calling `onMessage({ rideId: 'ride-1', riderId: null })`. Leave Seat and Withdraw are still there. |
+| ME-06 | Driver, Requests tab | Confirmed Riley and Bo, pending Pat | "Message Riley Rider" and "Message Bo Rider", with nothing on Pat. Riley's calls `onMessage({ rideId: 'ride-1', riderId: 'rider-a' })`. Accept and Deny are still there. |
+| ME-07 | 2-hour window | Driver's Ride Details 1 h 59 min, exactly 2 h, and 3 h after departure | Both buttons at 1 h 59 min. None at exactly 2 h (the server counts that as `completed`). None at 3 h. |
+| ME-08 | Messages list | **A:** an open chat with Dana and an archived chat with Cass. **B:** no conversations. **C:** a load error. | **A:** "Messages" comes before "Confirmed". The rows are in the order given, with names and destinations. Only Cass's row is read-only: its label says "read-only" and it shows the reason "Ride cancelled" (changed in Step 6 from the plain "Read-only" badge; see ME-11). Tapping it calls `onOpenConversation('conv-2')`. **B:** "No conversations yet." **C:** the error text. |
+| ME-09 | Archived chats stay reachable | **A:** a rider with no requests left (the ride was cancelled). **B:** a driver with no rides. | The archived row is shown and opens `conv-2`. The existing empty state is still shown below it. |
+| ME-10 | Past rides keep Message buttons until 2 hours after departure (added in Step 6) | Requests tab. Rider: departed rides with an accepted, a pending and a cancelled request. Driver: a departed ride with confirmed Riley and Bo and pending Pat. **A:** rider, 1 h after departure. **B:** driver, 1 h after departure. **C:** both modes at 1 h 59 min, exactly 2 h and 3 h. **D:** flag off. **E:** both modes 3 h after departure, with that ride's chat (`state: 'completed'`, `canSend: false`) passed in. | **A:** "Past rides" shows only "Message Dana Driver", calling `onMessage({ rideId: 'ride-1', riderId: null })`; the three View Ride buttons are still there. **B:** "Message Riley Rider" and "Message Bo Rider" on the past card, none for Pat; Bo's calls `onMessage({ rideId: 'ride-1', riderId: 'rider-b' })`; the passenger summary is unchanged. **C:** buttons at 1 h 59 min; none at exactly 2 h or 3 h. **D:** no Message buttons. **E:** no Message buttons; the chat is in the Read-only group with "Ride ended", there is no Active group, and tapping it calls `onOpenConversation('conv-1')`. |
+| ME-11 | Messages list split into Active and Read-only, no count badge (added in Step 6) | **A:** five chats in mixed order (two `canSend: true`, three not). **B:** read-only chats with states `ride_cancelled`, `seat_cancelled`, `completed` and an unknown state. **C:** only active chats. **D:** only active, then only read-only. **E:** three chats and no rides. **F:** `canSend` missing. **G:** one chat in each group. | **A:** headings "Active" then "Read-only"; each group keeps the given order. **B:** "Ride cancelled", "Seat cancelled", "Ride ended", "Read-only". **C:** no read-only label or badge on any row. **D:** only the group that has chats is shown. **E:** "Messages" with no "3", "2" or "1" badge. **F:** the chat is under Read-only, never Active. **G:** each row opens its own chat (`conv-1`, then `conv-2`). |
+
+### Manual checks (local Supabase only)
+
+These need the app pointed at the **local** Supabase stack (`~/CarpoolBoard-LocalDB`, API at `127.0.0.1:54321`) by starting Expo with shell variables, which override `.env.local` without editing it:
+
+```sh
+EXPO_PUBLIC_SUPABASE_URL=http://<Mac IP or 127.0.0.1>:54321 \
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local anon key from `supabase status`> \
+EXPO_PUBLIC_MESSAGING_ENABLED=true npx expo start
+```
+
+They use two devices or simulators: a driver and an accepted rider. Departure times are moved **in the local database only**. All of them are Not Run.
+
+| ID | Check | Expected result |
+| --- | --- | --- |
+| MM-1 | The driver and rider exchange messages | Each message appears on the other device within about 5 s, with the right side and time |
+| MM-2 | The driver cancels the ride | Both chats turn read-only, and stay reachable from the Messages list |
+| MM-3 | The rider leaves their seat | The chat turns read-only ("This seat is no longer confirmed…"), and the driver's Message button for that rider disappears |
+| MM-4 | The ride's departure is moved to more than 2 h ago | Read-only ("This ride has ended…"); no Message buttons |
+| MM-5 | A pending rider | No Message button anywhere |
+| MM-6 | 21 messages within one minute | The 21st shows the server's "sending messages too quickly" message |
+| MM-7 | Airplane mode on, send, then airplane mode off and Retry | The message is saved once (checked in the local database) and shown once |
+| MM-8 | Production safety: the flag is unset and `.env.local` is unchanged | The app looks and behaves as before; no messaging request is made |
+
+### Result before implementation (Messaging Step 1)
+
+On November 8, 2026, the three messaging files were run on `feature/ride-messaging` at `8ad3533`, with the test files not yet committed and no messaging app code. Of the 119 tests, **10 passed, 10 failed, and 99 could not run** because their suites failed to load. Jest itself reports "10 failed, 26 passed, 36 total" for the full suite: the 26 passes are the 16 earlier tests plus 10 messaging tests, and tests in a suite that fails to load aren't counted. **Every failure was expected:**
+
+| File | Result | Why |
+| --- | --- | --- |
+| MD (73 tests) | Suite didn't load | `Cannot find module '../lib/messaging'`: the file doesn't exist yet |
+| MC (26 tests) | Suite didn't load | Same missing module (`lib/messaging`, and `screens/ConversationScreen` after it) |
+| ME (20 tests) | 10 failed, 10 passed | The 10 failures are ME-02, ME-03, ME-05, ME-06, ME-07 (1 h 59 min), ME-08 A–C and ME-09 A–B. Each fails because a Message button or the Messages list isn't there yet. The 10 passes are ME-01 A–D, ME-04 A and B (×3), and ME-07 at exactly 2 h and at 3 h. They check that something is **absent**, which is already true today, and they must keep passing after the change. |
+
+**Checking that the failures aren't test setup problems:** the MD and MC suites couldn't load, so their test bodies didn't run. Two checks were made from the scratchpad, outside the repository, with no messaging code:
+
+1. **A probe** of the mechanics these suites rely on passed 4 of 4: the `America/Chicago` time zone, the time format, the virtual `expo-crypto` fake, faking `AppState`, and fake timers driving a polling screen with a disabled button.
+2. **Empty stand-ins** for the two missing modules, mapped in for one run only. All 73 MD tests and all 26 MC tests then loaded and ran. Every failure was an assertion about missing behavior, not a setup error. Six MD tests passed against the empty stand-in: the five "flag off" cases (a stand-in that always says off) and MD-13 B (no network request was made).
+
+The second check found one mistake in a test **title**: MD-12 printed the input value instead of the expected result. The title was fixed. No expected value changed.
+
+The earlier tests were run separately, before and after the new files were added, and passed 16 of 16 both times.
+
 ## An important behavior these tests do not cover
 
 **These tests do not show that the chosen pickup is saved correctly or reaches riders.**
@@ -264,6 +477,9 @@ Fake only `expo-location`, the point where the app talks to the phone's location
 | --- | --- |
 | `__tests__/pickup-selection-test.js` | The automated versions of TC-01 to TC-04 |
 | `__tests__/map-zoom-test.js` | Step 2: the automated versions of Z-01 to Z-09 and R-01 (to be written in Step 2) |
+| `__tests__/messaging-data-test.js` | Messaging: MD-01 to MD-13 (data layer, `lib/messaging.js`) |
+| `__tests__/messaging-conversation-test.js` | Messaging: MC-01 to MC-12 (conversation screen and polling) |
+| `__tests__/messaging-entry-points-test.js` | Messaging: ME-01 to ME-11 (Message buttons, including on Past rides, and the Messages list with its Active and Read-only groups) |
 | `package.json`, `package-lock.json` | Test tools, their versions, and the test command |
 | `PROTOTYPE-9-TEST-PLAN.md` | Test cases, manual steps, and results |
 | `test-results/*.txt` | Saved output from each run |
@@ -342,6 +558,14 @@ The current code suggests Step 2 will mainly affect the map files, `screens/MapS
 | After Step 2 (official; automated: TC-01 to TC-04, Z-01 to Z-09, R-01) | `71dfcd275fa0454f2b14a89d2221186f347a9a6c` (short: `71dfcd2`) | Changed only by Step 2: `screens/MapScreen.js` and new `lib/mapZoom.js`. Pickup files identical | November 7, 2026 | Automated | 2 suites passed; 16 tests passed, 0 failed; 0.772 s; exit status 0 | `test-results/after-step-2-71dfcd2.txt` |
 | Additional GPS manual checks (GPS-1 to GPS-6) | App code of `71dfcd2` (HEAD was `a0b5352`, a documentation-only commit with identical app code) | Changed only by Step 2 | November 7, 2026 | Manual, user-observed, Expo Go on a physical iPhone 11 with iOS 26 | GPS-1 to GPS-6 Pass. No expected results recorded in advance | None (manual; results recorded in this plan) |
 | Step 2 manual checks (MZ-1 to MZ-4) | App code of `71dfcd2` (HEAD was `a0b5352`, a documentation-only commit with identical app code) | Changed only by Step 2 | November 7, 2026 | Manual, user-observed, Expo Go on a physical iPhone 11 with iOS 26 | MZ-1 Pass, MZ-2 Pass, MZ-3 Pass, MZ-4 Pass | None (manual; results recorded in this plan) |
+| Messaging baseline, before any messaging work (Messaging Step 0) | `8ad35330c2d7fc45c882917f3ad147b016e68273` (short: `8ad3533`) on `feature/ride-messaging` | App code identical to `71dfcd2` (8ad3533 added only SQL and documentation) | November 8, 2026 | Automated | 2 suites passed; 16 tests passed, 0 failed; exit status 0 | `test-results/baseline-8ad3533-ride-messaging.txt` |
+| Messaging tests written, no messaging code (Messaging Step 1) | `8ad3533` plus the uncommitted messaging test files and this plan | Identical to `8ad3533` | November 8, 2026 | Automated, full suite | Jest: 2 suites passed, 3 failed; 26 tests passed, 10 failed; exit status 1. The 16 earlier tests passed. Messaging: 10 passed, 10 failed, and 99 didn't run (2 suites couldn't load). All failures were expected. See [Result before implementation](#result-before-implementation-messaging-step-1). | `test-results/messaging-step1-8ad3533-uncommitted-tests.txt` |
+| Off switch only (Messaging Step 2): new `lib/messaging.js` containing only `isMessagingEnabled()`, not imported by the app | `8ad3533` plus uncommitted `lib/messaging.js`, the messaging tests and this plan | Identical to `8ad3533` apart from the new, unimported `lib/messaging.js` | November 8, 2026 | Automated, full suite | Jest: 2 suites passed, 3 failed; 33 tests passed, 76 failed; exit status 1. The 16 earlier tests passed. **MD-12 (all 6) passed.** The 66 MD failures were expected: 65 because data-layer functions are added in Step 3, and MD-13 A because the `./supabase` import also comes in Step 3. The MC suite still can't load (`screens/ConversationScreen`, Step 4). ME: unchanged from Step 1 (10 passed, 10 failed). | `test-results/messaging-step2-8ad3533-uncommitted.txt` |
+| Data layer (Messaging Step 3): `lib/messaging.js` implemented; `expo-crypto` 58.0.7 installed with `npx expo install expo-crypto` | `8ad3533` plus uncommitted `lib/messaging.js`, `package.json`, `package-lock.json`, the messaging tests and this plan | Identical to `8ad3533` apart from the new `lib/messaging.js`, which the app still doesn't import | November 8, 2026 | Automated, full suite | Jest: 3 suites passed, 2 failed; 100 tests passed, 10 failed; exit status 1. The 16 earlier tests passed. **MD: 74 of 74 passed**, including MD-13 B (no network request). The 10 failures are the expected ME failures from Step 1 (Message buttons and the Messages list, Steps 4–5). The MC suite still can't load (`screens/ConversationScreen`, Step 4). | `test-results/messaging-step3-8ad3533-uncommitted.txt` |
+| Conversation screen (Messaging Step 4): `screens/ConversationScreen.js`, `lib/useRideConversation.js`, `components/MessageBubble.js`, `components/MessageComposer.js`, `lib/messageThread.js`; the text rules moved to `lib/messageText.js` | `8ad3533` plus all uncommitted messaging files, `package.json`, `package-lock.json` and this plan | Identical to `8ad3533` apart from the new, unconnected messaging files (`App.js` and the existing screens and components are unchanged) | November 8, 2026 | Automated, full suite | Jest: 4 suites passed, 1 failed; 126 tests passed, 10 failed; exit status 1. The 16 earlier tests passed. **MD: 74 of 74. MC: 26 of 26.** The 10 failures are the expected ME failures (Message buttons and the Messages list, Step 5). No network request: MD-13 B passed, and the MC suite never loads `lib/supabase` (which throws without its environment variables). | `test-results/messaging-step4-8ad3533-uncommitted.txt` |
+| Integration (Messaging Step 5): Message buttons and the Messages list connected; `ConversationScreen` opened from `App.js`. Changed: `App.js`, `screens/RequestsScreen.js`, `screens/RideDetailsScreen.js`, `components/AppButton.js` (optional `accessibilityLabel`), `lib/rideStatus.js` (`isMessagingWindowOpen`) | `8ad3533` plus all uncommitted messaging files, `package.json`, `package-lock.json` and this plan | Changed by Steps 1–5 only. `.env.local`, `eas.json`, `app.json` and `supabase/` unchanged | November 9, 2026 | Automated, full suite, `EXPO_PUBLIC_MESSAGING_ENABLED` unset | Jest: 5 suites passed; **136 tests passed, 0 failed**; exit status 0. **ME: 20 of 20** (the 10 expected failures from Steps 1–4 now pass; the 10 that check absence still pass). **MC: 26 of 26. MD: 74 of 74.** The 16 earlier tests passed. No network request: MD-13 B passed. No expected result was changed. | `test-results/messaging-step5-8ad3533-uncommitted.txt` |
+| Fixes #1 and #2 tests written, before the app change (Messaging Step 6) | `8ad3533` plus all uncommitted messaging work; ME-08 A updated, ME-10 and ME-11 added | Same as Step 5 | November 9, 2026 | Automated, full suite, `EXPO_PUBLIC_MESSAGING_ENABLED` unset | Jest: 4 suites passed, 1 failed; 141 tests passed, **13 failed**; exit status 1. All 13 failures were expected and for the intended reason: ME-08 A ("Ride cancelled" not found), ME-10 A, B, C (1 h 59 min, both modes) and E (both modes) (no Message button on Past rides / no Read-only group), ME-11 A, B, D, E, F, G (no groups, or the "3" count badge). The new tests that check absence (ME-10 C at 2 h and 3 h, ME-10 D, ME-11 C) already passed. The 136 Step 5 tests other than ME-08 A passed. | `test-results/messaging-step6-8ad3533-uncommitted-tests.txt` |
+| Fixes #1 and #2 (Messaging Step 6): Message buttons on Past-ride cards until 2 h after departure, both modes; Messages list split into Active / Read-only by `canSend`, count badge removed, read-only rows show the server state's reason. Changed: `screens/RequestsScreen.js` only | Same as the row above | Changed by Steps 1–6 only. `supabase/`, `.env.local`, `eas.json`, `app.json`, `lib/messaging.js` (flag) unchanged | November 9, 2026 | Automated, full suite, `EXPO_PUBLIC_MESSAGING_ENABLED` unset | Jest: 5 suites passed; **154 tests passed, 0 failed**; exit status 0. **ME: 38 of 38. MC: 26 of 26. MD: 74 of 74.** The 16 earlier tests passed. No network request: MD-13 B passed. | `test-results/messaging-step6-8ad3533-uncommitted.txt` |
 
 The first row cannot name a single commit that contains the tests, because they were not committed when it ran. The saved output records the SHA-256 of the test file: `97fa4d1a1ef82da49bfc9bb303beec570861914c84f0eb5423d7f1d09db33d39`. The "tests committed" row is the one to use as the before-Step-2 comparison.
 
@@ -475,6 +699,143 @@ The Step 2 method description said only `react-native-maps` and `fetchDrivingRou
 | **Possible effect** | On iPhone, a route between two close points (such as Hughes-Trigg to Fondren) may briefly zoom in closer than the limit, then settle back to it. On a wide screen, the map's limit and the buttons' limit may not match exactly. |
 | **Verified?** | **Partly.** The limitation itself comes from reading the library's documentation and source code. On November 7, 2026, MZ-3 passed when checked by hand on a physical iPhone 11 (iOS 26): the short route displayed correctly with both endpoints visible. A brief native zoom past the limit was not independently checked, so the result neither confirms nor rules out an overshoot, and strict `maxZoomLevel` enforcement remains unverified. It was checked on one device only: a physical iPhone 11 with iOS 26, in Expo Go. MZ-3's expected result is unchanged. |
 | **Not used** | `cameraZoomRange` is a hard limit on iOS 13 and later, but react-native-maps does not support it on Android. It was not used, to keep to the planned design. |
+
+### A-1: Messaging Step 3: MD-13 A failed on its first run because of an app comment
+
+| Field | Details |
+| --- | --- |
+| **When** | November 8, 2026, during Messaging Step 3, before anything was committed |
+| **What happened** | 72 of 73 data-layer tests passed. MD-13 A failed: its scan for secret-key references (`/service[_-]?role\|secret/i`) matched a comment in `lib/messaging.js` that read "This flag is not a secret". |
+| **Cause** | **The fault was in the app file, not the test.** No key was present; the comment's wording tripped a deliberately strict check. |
+| **Correction** | The comment was reworded ("The flag isn't hidden…"). The test was not changed. |
+| **Result after the correction** | 73 of 73 passed (74 of 74 once M-2's case was added). |
+
+### M-2: Messaging Step 3: one data-layer test added after the proof run
+
+When the data-layer tests were checked for failing (see [Messaging Step 3: proof that the data-layer tests can fail](#messaging-step-3-proof-that-the-data-layer-tests-can-fail)), making `canSend` come from `state === 'open'` instead of `can_send` was caught by only one test: the `can_send: null` case. In MD-07's four main cases, the state always agrees with `can_send`. The requirement that the server's `can_send` is never re-derived on the phone deserved a direct check, so one MD-07 case was **added**: state `open` with `can_send: false` must give `canSend: false`. No existing expected result was changed. With the same temporary bug, both that case and the null case failed. With the real code, 74 of 74 passed.
+
+### Messaging Step 3: proof that the data-layer tests can fail
+
+On November 8, 2026, each bug below was put into `lib/messaging.js` temporarily and the data-layer tests were run. The file was then restored from a saved copy, and `cmp` confirmed it was byte-for-byte identical. None of these bugs was committed.
+
+| Temporary bug | Failed tests | Passed tests |
+| --- | --- | --- |
+| `canSend` taken from `state === 'open'` instead of `can_send` | MD-07 (`can_send` null); after M-2, also MD-07 (`open` with `can_send` false) | All others |
+| Length counted in UTF-16 units instead of characters | MD-09 F (1,000 emoji) | All others |
+| `55P03` treated as an unknown error | MD-08 `55P03`, for all 4 RPC functions | All others |
+| A rider's call sends a made-up `p_rider_id` | MD-01 | All others |
+| Messages not sorted oldest first | MD-06 A | All others |
+
+Sending `p_rider_id: null` for a rider was **not** used as a bug: the SQL defaults that argument to null, so it is allowed, and MD-01 deliberately accepts it.
+
+**Request check against the real library (scratchpad only).** The data layer was also run against a real supabase-js 2.117 client whose `fetch` only recorded each request and answered locally, using the URL `https://example.invalid`. Nothing left the machine. The recorded requests matched `messaging-1-tables.sql`:
+- POST `/rest/v1/rpc/open_my_ride_conversation` with `{"p_ride_id":…}`, and with `p_rider_id` added for a driver
+- POST `/rest/v1/rpc/list_my_ride_conversations` with `{}`, and with `{"p_conversation_id":…}` for one conversation
+- POST `/rest/v1/rpc/send_my_ride_message` with `p_conversation_id`, `p_client_message_id` and the trimmed `p_body`
+- GET `/rest/v1/ride_messages` selecting the 6 columns, filtered by `conversation_id=eq.…` (plus `created_at=gte.…` when polling), ordered `created_at.desc,id.desc`, limited to 200
+
+### T-2: Messaging Step 4: 18 conversation-screen tests failed on their first run because of a test bug
+
+| Field | Details |
+| --- | --- |
+| **When** | November 8, 2026, during Messaging Step 4, before anything was committed |
+| **What happened** | 8 of 26 passed. Every test that ran after MC-04 failed, including tests that never send. For example, MC-10 A saw `loadMessages` called 0 times after rendering. The output showed "You seem to have overlapping act() calls". |
+| **Cause** | **The fault was in the test, not the app**, the same kind of problem as T-1. MC-04 started `fireEvent.press` without awaiting it and then awaited another `act()`. MC-08 A started two presses without awaiting either. In Testing Library 14 every `fireEvent` runs inside an awaited `act()`, so overlapping calls broke React's act scope for the rest of the file. The tests were written that way on the assumption that the press handler would wait for the server. It doesn't: it starts the send and returns. |
+| **Correction** | MC-04 now awaits its press. The send is still held pending by the test, so the "Sending…" checks are unchanged. MC-08 A now makes two awaited taps in a row while the first send is still pending, and is retitled from "a fast double tap" to "a double tap". **No expected result was changed.** |
+| **What MC-08 A no longer shows** | Testing Library 14 has no synchronous press, so two taps that both arrive before React re-renders can't be produced without the overlapping `act()` that caused this bug. The screen still guards against that case: the draft is read and cleared through a ref, so a second tap in the same frame finds empty text. That guard is covered by code review only. |
+| **Result after the correction** | 26 of 26 passed, with no act() warnings. |
+
+### A-2: Messaging Step 4: the first load didn't run with real timers (app bug, found outside the suite)
+
+| Field | Details |
+| --- | --- |
+| **When** | November 8, 2026, during Messaging Step 4, after all 26 MC tests passed |
+| **How it was found** | A scratchpad check rendered the screen in dark mode **without** the suite's fake timers and fake `AppState`. It stayed on "Loading conversation…". The hook on its own made 0 calls. |
+| **Cause** | **The fault was in the app.** `isActiveState` treated only `null`, `undefined`, `'active'` and `'unknown'` as active. In Jest's React Native setup, `AppState.currentState` is a mock **function**, so the hook decided the app was in the background and skipped its first load. On a real phone `currentState` is a string (or `null` at launch, which the old check accepted), so this failure is specific to that environment. It still showed that anything unexpected made the screen silently wait forever. |
+| **Correction** | Only `'background'` and `'inactive'` now count as not active. Anything else, including a non-string, counts as active. With real timers, the hook loads at once ("status ready, calls 1") and the dark-mode render passes. |
+| **Why the suite missed it** | Every MC test sets `AppState.currentState = 'active'` before rendering, so none of them mounts the screen in any other state (see U-2). The MC-10 E bug check (ignoring the background) was re-run after the fix and still fails as it should. |
+
+### U-2: Messaging Step 4: behavior not covered by the automated tests
+
+- **Mounting while the app isn't marked active:** every MC test starts with `AppState.currentState = 'active'` (see A-2).
+- **Same-frame double tap:** covered by code review only (see T-2).
+- **Real keyboard and scrolling:** `KeyboardAvoidingView` (`behavior="padding"` on both platforms, as Expo's keyboard guide recommends for edge-to-edge Android), scrolling to the newest message, and the composer's growth are visual. The planned manual checks MM-1 to MM-8 need the screen connected to `App.js` (Step 5).
+- **Dark mode:** checked once from the scratchpad. The bubbles, background and text used the dark tokens (`#0F172A` background, `#3B82F6` mine, `#1E2B4D` theirs, `#F1F5F9` text). It isn't part of the committed suite.
+
+### Messaging Step 4: proof that the conversation-screen tests can fail
+
+On November 8, 2026, each bug below was put into the screen, the hook or `lib/messageThread.js` temporarily, and the 26 MC tests were run. Each file was then restored from a saved copy, and `cmp` confirmed it was byte-for-byte identical. None of these bugs was committed.
+
+| Temporary bug | Failed tests | Passed tests |
+| --- | --- | --- |
+| Composer shown when `state` is `open`, instead of when `can_send` is true | MC-03 A and B | All others |
+| Retry makes a new client id | MC-07 | All others |
+| Polling ignores the app going to the background | MC-10 E (re-checked after A-2's fix: still fails) | All others |
+| No overlap guard: a fixed 5 s interval | MC-10 G | All others |
+| The server's copy doesn't replace a "Not sent" message | MC-08 C | All others |
+| A poll starts reading 1 s **after** the newest message | MC-10 B | All others |
+| No re-check after a refused send | MC-09 | All others |
+| Polling not stopped on leaving the screen | MC-10 F | All others |
+
+### Messaging Step 5: proof that the entry-point tests can fail
+
+On November 9, 2026, each bug below was put into the Step 5 code temporarily and the 20 ME tests were run. Each file was then restored from a saved copy, and `cmp` confirmed it was byte-for-byte identical. None of these bugs was committed.
+
+| Temporary bug | Failed tests | Passed tests |
+| --- | --- | --- |
+| Requests tab, rider: Message on every request, not just accepted ones | ME-05 | All others |
+| The 2-hour window counts exactly 2 h after departure as still open (`<=` instead of `<`) | ME-07 (exactly 2 h) | All others |
+| The Messages list ignores the flag | ME-01 C and D | All others |
+| Ride Details: Message on every passenger row that isn't mine, without checking that I'm the ride's driver | ME-03, ME-04 B (pending, denied, cancelled) | All others |
+| Messages list rows never marked "Read-only" | ME-08 A | All others |
+
+### Messaging Step 6: proof that the new entry-point tests can fail
+
+On November 9, 2026, each bug below was put into `screens/RequestsScreen.js` temporarily and the 38 ME tests were run. The file was then restored from a saved copy, and `cmp` confirmed it was byte-for-byte identical. None of these bugs was committed.
+
+| Temporary bug | Failed tests | Passed tests |
+| --- | --- | --- |
+| Message buttons on the Requests tab ignore the 2-hour window (both window checks removed) | ME-10 C (exactly 2 h and 3 h, both modes), ME-10 E (both modes) | All others |
+| Only the shared button's window check removed (the driver's Past card keeps its own) | ME-10 C (rider, exactly 2 h and 3 h), ME-10 E (rider) | All others. The driver's Past card is still guarded by its own check, so this is expected |
+| Groups split by `state === 'open'` instead of `canSend` | ME-11 F | All others |
+| Read-only group shown before Active | ME-08 A, ME-11 A | All others |
+| Count badge put back on "Messages" | ME-11 E | All others |
+
+### S-1: Messaging Step 5: App.js wiring checked from the scratchpad (not part of the suite)
+
+No committed test renders `App.js`, so the wiring was checked with a temporary test that rendered the real `App.js` with a fake `lib/supabase` client (every call recorded and answered locally) and `global.fetch` replaced by a spy that fails. The file was run from `__tests__/`, then moved to the scratchpad, so it is **not** in the repository or in the 136 tests above.
+
+| Check | Result |
+| --- | --- |
+| Flag unset: Requests tab and Ride Details show no Messages list, no Message button and no conversation row; Leave Seat and Leave are still there; **zero** messaging calls (no RPC, no `ride_messages` read) | Pass |
+| Flag `"TRUE"` (not exactly `"true"`): same as unset, zero messaging calls | Pass |
+| Flag `"true"`: no messaging call while on Home. Opening the Requests tab calls `list_my_ride_conversations` once with no arguments. The row for Dana uses her board profile name; the archived row's driver isn't on the board, so it reads "Your driver" and is marked read-only. **Message Dana Driver** calls `open_my_ride_conversation` with exactly `{ p_ride_id: 'ride-1' }` and opens the chat with the tab bar hidden. **Back** shows the Requests tab and the tab bar again and reloads the list. The archived row opens with the "This ride was cancelled…" notice and no composer. Ending the session while a chat is open returns to sign-in with the chat gone; signing in again opens Home with no chat and no messaging call | Pass |
+| `fetch` calls in all three | 0 |
+
+To check that these checks can fail, three bugs were put into `App.js` temporarily (restored from a saved copy each time, confirmed with `cmp`): the tab bar never hidden (the "flag on" check failed); sign-out not closing the chat (the "flag on" check failed); the list loaded without checking the flag (both flag-off checks failed).
+
+### N-1: Messaging Step 5: decisions the plan didn't spell out
+
+These are additions, not changes to any expected result.
+
+- **The Messages list isn't filtered by mode.** Both modes list every conversation the server returns (as driver and as rider), so an archived chat is always reachable. Each row shows the other person's role.
+- **The other person's name** comes from the profiles the board already loads. A conversation whose ride was cancelled (deleted) usually has no profile on the board, so it shows "Your driver" or "Your rider". No extra profile query was added.
+- **Requests-tab Message buttons appear only on upcoming rides**, because that is where the existing actions are (rider: Confirmed cards; driver: Confirmed passengers). Between departure and departure + 2 h, Ride Details still shows the buttons (ME-07), and an existing chat is in the Messages list.
+- **Who sees which button on Ride Details:** the driver's buttons need Driver mode, like Accept and Deny. A rider's button for the driver is on their own row in either mode, like Leave.
+- **The 2-hour window and the phone's clock.** The window decides only whether a button is *shown*. It never authorizes anything: `open_my_ride_conversation` refuses to start a chat outside the rules, and the conversation screen sends only while the server's `can_send` is true. A phone with a wrong clock can show or hide a button, but it can't get around the server.
+- **Opening a chat:** while `open_my_ride_conversation` is running, the tapped button shows a spinner and other Message buttons are disabled (`openingMessage` prop), and a second tap is ignored. A refusal or failure shows the server's message in the screen's existing notice, and nothing opens.
+- **While a chat is open** it covers the whole app, including the tab bar. The tabs underneath stay mounted but hidden from screen readers, so Back returns to the same tab, the same Ride Details and the same scroll position. Android's back button also closes the chat.
+- **New optional props**, which default to off: `isConversationsLoading` (Requests tab, shows "Loading conversations…" before the first answer) and `openingMessage` (both screens).
+
+### U-3: Messaging Step 5: not covered by the committed automated tests
+
+- `App.js` itself (see S-1: checked once from the scratchpad).
+- Android's hardware back button closing a chat.
+- On-device layout: Message buttons on narrow screens, the overlay above the keyboard, and returning to the same scroll position. These are covered by the manual checks MM-1 to MM-8, which need the local Supabase database and the flag set to `true` (not run yet).
+
+### Future improvement: older messages
+
+`loadMessages` returns the newest 200 messages in a conversation (decided November 8, 2026). Older messages aren't shown. With the server's limit of 20 messages per minute and short ride windows, this is expected to be enough for now. A "Load earlier messages" control (reading messages before the oldest one shown) is a possible later step and is not planned yet.
 
 ### U-1: Behavior added but not covered by a test
 

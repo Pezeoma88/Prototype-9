@@ -15,7 +15,7 @@ import ReviewList from '../components/ReviewList';
 import RouteLine from '../components/RouteLine';
 import SectionHeader from '../components/SectionHeader';
 import TextField from '../components/TextField';
-import { getPastRideLabel } from '../lib/rideStatus';
+import { getPastRideLabel, isMessagingWindowOpen } from '../lib/rideStatus';
 import { colors, createThemedStyles, radius, spacing, typography } from '../theme/theme';
 
 // Ride Details: shown after selecting a ride from Available Rides. Shows
@@ -36,6 +36,17 @@ import { colors, createThemedStyles, radius, spacing, typography } from '../them
 // edited, cancelled or left, and its pending requests show as Expired. The
 // details, passengers and reviews stay visible for reference, and the review
 // form keeps working.
+//
+// Messaging (Prototype 9, only when `messagingEnabled` is true; left out
+// means off): a Message button on confirmed passengers' rows. The ride's
+// driver (in Driver mode, like Accept/Deny) gets one per confirmed rider; a
+// confirmed rider gets one on their own row for the driver (in either mode,
+// like Leave). Pending, denied and cancelled requests never get one. The
+// buttons show until 2 hours after departure (isMessagingWindowOpen, the
+// server's grace period); the server still decides whether a chat opens.
+// `onMessage({ rideId, riderId })` opens it: riderId is null for a rider,
+// whom the server takes from the session. `openingMessage` (same shape, or
+// null) marks the button whose chat is being opened.
 export default function RideDetailsScreen({
   detailsDriver,
   currentUser,
@@ -67,10 +78,54 @@ export default function RideDetailsScreen({
   driverReviews,
   reviewEligibility,
   handleSubmitReview,
+  messagingEnabled = false,
+  nowMs,
+  onMessage,
+  openingMessage = null,
 }) {
   const isFull = detailsDriver.seats === 0;
   // Driver controls only while the ride is still upcoming.
   const canManage = isOwnerDriver && !isDeparted;
+  const canShowMessage =
+    messagingEnabled === true &&
+    typeof onMessage === 'function' &&
+    isMessagingWindowOpen(detailsDriver, nowMs ?? Date.now());
+
+  // The Message button for one confirmed passenger's row, or null.
+  function renderMessageButton(rider, isSelf) {
+    if (!canShowMessage) {
+      return null;
+    }
+    let target = null;
+    let otherName = null;
+    if (isOwnerDriver && !isSelf) {
+      target = { rideId: detailsDriver.id, riderId: rider.id };
+      otherName = rider.name;
+    } else if (isSelf && !isOwnDetailsRide) {
+      target = { rideId: detailsDriver.id, riderId: null };
+      otherName = detailsDriver.name;
+    }
+    if (target === null) {
+      return null;
+    }
+    const isOpening =
+      openingMessage !== null &&
+      openingMessage.rideId === target.rideId &&
+      (openingMessage.riderId ?? null) === target.riderId;
+    return (
+      <AppButton
+        title={isSelf ? 'Message Driver' : 'Message'}
+        icon="chatbubble-ellipses-outline"
+        variant="secondary"
+        size="sm"
+        loading={isOpening}
+        disabled={openingMessage !== null && !isOpening}
+        accessibilityLabel={`Message ${otherName}`}
+        onPress={() => onMessage(target)}
+        style={styles.messageButton}
+      />
+    );
+  }
 
   function renderRiderAction() {
     // Requesting is hidden entirely on your own ride, so nobody can request
@@ -367,6 +422,7 @@ export default function RideDetailsScreen({
                     />
                   )}
                 </View>
+                {renderMessageButton(rider, isSelf)}
               </Card>
             );
           })}
@@ -518,5 +574,9 @@ const styles = createThemedStyles(() => ({
   },
   ownerActions: {
     marginTop: spacing.xs,
+  },
+  messageButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
   },
 }));
