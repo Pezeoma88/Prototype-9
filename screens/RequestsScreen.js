@@ -1,4 +1,4 @@
-import { RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import AppButton from '../components/AppButton';
 import Avatar from '../components/Avatar';
@@ -13,7 +13,12 @@ import SectionHeader from '../components/SectionHeader';
 import StarRating from '../components/StarRating';
 import { formatDeparture } from '../lib/format';
 import { getReviewEligibility } from '../lib/reviews';
-import { getPastRideLabel, isRideUpcoming, sortPastRides } from '../lib/rideStatus';
+import {
+  getPastRideLabel,
+  isMessagingWindowOpen,
+  isRideUpcoming,
+  sortPastRides,
+} from '../lib/rideStatus';
 import { colors, createThemedStyles, gutter, radius, spacing, typography } from '../theme/theme';
 
 // Requests tab: every request in one place, following the current mode.
@@ -32,6 +37,25 @@ import { colors, createThemedStyles, gutter, radius, spacing, typography } from 
 // Departed rides move to a Past section as history: a pending request there
 // has Expired, an accepted one is Completed, and Rate Driver stays available.
 // Nothing is changed in Supabase; these labels come from the departure time.
+//
+// Messaging (Prototype 9, only when `messagingEnabled` is true; left out
+// means off, and then nothing below is shown even if conversations are
+// passed in):
+// * A "Messages" section at the top, in both modes, listing `conversations`
+//   (from list_my_ride_conversations, with `otherPersonName` added by
+//   App.js) in two groups: "Active" (the server's `canSend` is true) and
+//   "Read-only" (anything else), each in the order given. Each row opens
+//   its chat through `onOpenConversation(id)`, including read-only
+//   (archived) ones, so a chat stays reachable after its ride or seat is
+//   gone, or the 2-hour window has passed. Whether a chat is read-only is
+//   the server's `canSend`, never worked out here. No count badge: nothing
+//   tracks unread messages, so a number would mislead.
+// * A Message button on each confirmed request (Rider mode) and each
+//   confirmed passenger (Driver mode), never on pending, denied or
+//   cancelled ones, until 2 hours after departure, including on Past-ride
+//   cards (a ride is "past" from departure). It calls
+//   `onMessage({ rideId, riderId })`; riderId is null for a rider. The
+//   server still decides whether that chat opens.
 
 // The rider's sections, in display order. Denied and cancelled requests are
 // final: they can't be sent again for that ride.
@@ -70,9 +94,103 @@ export default function RequestsScreen({
   reviewsLoaded,
   onOpenRide,
   onGoHome,
+  messagingEnabled = false,
+  conversations = [],
+  conversationsError = '',
+  isConversationsLoading = false,
+  onMessage,
+  onOpenConversation,
+  openingMessage = null,
 }) {
   const isDriver = activeMode === 'driver';
   const isFirstLoad = isBoardLoading && drivers.length === 0;
+  const showMessaging = messagingEnabled === true;
+
+  // The Message button for one confirmed rider on a ride, or null.
+  function renderMessageButton({ ride, riderId, otherName, title, style }) {
+    if (!showMessaging || typeof onMessage !== 'function' || !isMessagingWindowOpen(ride, nowMs)) {
+      return null;
+    }
+    const target = { rideId: ride.id, riderId };
+    const isOpening =
+      openingMessage !== null &&
+      openingMessage.rideId === target.rideId &&
+      (openingMessage.riderId ?? null) === target.riderId;
+    return (
+      <AppButton
+        title={title}
+        icon="chatbubble-ellipses-outline"
+        variant="secondary"
+        size="sm"
+        loading={isOpening}
+        disabled={openingMessage !== null && !isOpening}
+        accessibilityLabel={`Message ${otherName}`}
+        onPress={() => onMessage(target)}
+        style={style}
+      />
+    );
+  }
+
+  // One group of the Messages list ("Active" or "Read-only"), or null when
+  // it has no conversations.
+  function renderConversationGroup({ title, testID, items, isFirst }) {
+    if (items.length === 0) {
+      return null;
+    }
+    return (
+      <View testID={testID} style={!isFirst && styles.conversationGroupNext}>
+        <Text style={styles.groupLabel} accessibilityRole="header">
+          {title}
+        </Text>
+        {items.map((conversation) => (
+          <ConversationRow
+            key={conversation.id}
+            conversation={conversation}
+            onPress={() => onOpenConversation?.(conversation.id)}
+          />
+        ))}
+      </View>
+    );
+  }
+
+  function renderMessagesSection() {
+    if (!showMessaging) {
+      return null;
+    }
+    let body;
+    if (conversations.length > 0) {
+      // Split by the server's can_send, keeping its order in each group.
+      // Anything but an explicit true is read-only.
+      const active = conversations.filter((conversation) => conversation.canSend === true);
+      const readOnly = conversations.filter((conversation) => conversation.canSend !== true);
+      body = (
+        <>
+          {renderConversationGroup({ title: 'Active', testID: 'messages-active', items: active, isFirst: true })}
+          {renderConversationGroup({
+            title: 'Read-only',
+            testID: 'messages-read-only',
+            items: readOnly,
+            isFirst: active.length === 0,
+          })}
+        </>
+      );
+    } else if (conversationsError !== '') {
+      body = null;
+    } else if (isConversationsLoading) {
+      body = <Text style={styles.emptyText}>Loading conversations…</Text>;
+    } else {
+      body = <Text style={styles.emptyText}>No conversations yet.</Text>;
+    }
+    // No count badge: it read like an unread count, and nothing tracks
+    // which messages have been read.
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="Messages" />
+        {conversationsError !== '' && <Notice message={conversationsError} tone="warning" />}
+        {body}
+      </View>
+    );
+  }
 
   function renderRiderView() {
     // Each of my requests, joined to its ride. A request whose ride isn't
@@ -152,6 +270,15 @@ export default function RequestsScreen({
                   onRate={() => onOpenRide(ride.id)}
                 />
               )}
+
+              {row.status === 'accepted' &&
+                renderMessageButton({
+                  ride,
+                  riderId: null,
+                  otherName: ride.name,
+                  title: 'Message Driver',
+                  style: styles.messageButtonFull,
+                })}
 
               <View style={styles.actions}>
                 <AppButton
@@ -241,6 +368,17 @@ export default function RequestsScreen({
                       onRate={() => onOpenRide(ride.id)}
                     />
                   )}
+
+                  {/* Until 2 hours after departure (renderMessageButton
+                      checks the window), e.g. for "I'm at the pickup". */}
+                  {row.status === 'accepted' &&
+                    renderMessageButton({
+                      ride,
+                      riderId: null,
+                      otherName: ride.name,
+                      title: 'Message Driver',
+                      style: styles.messageButtonFull,
+                    })}
 
                   <AppButton
                     title="View Ride"
@@ -364,14 +502,23 @@ export default function RequestsScreen({
               <Card key={ride.id} style={styles.card}>
                 <RideHeading ride={ride} onOpenRide={onOpenRide} />
                 {ride.matchedRiders.map((rider) => (
-                  <View key={rider.id} style={[styles.personRow, styles.requestBlock]}>
-                    <Avatar name={rider.name} role="rider" uri={rider.avatarUrl} size={38} />
-                    <View style={styles.personText}>
-                      <Text style={styles.personName} numberOfLines={1}>
-                        {rider.name}
-                      </Text>
+                  <View key={rider.id} style={styles.requestBlock}>
+                    <View style={styles.personRow}>
+                      <Avatar name={rider.name} role="rider" uri={rider.avatarUrl} size={38} />
+                      <View style={styles.personText}>
+                        <Text style={styles.personName} numberOfLines={1}>
+                          {rider.name}
+                        </Text>
+                      </View>
+                      <Badge label="Confirmed" tone="success" />
                     </View>
-                    <Badge label="Confirmed" tone="success" />
+                    {renderMessageButton({
+                      ride,
+                      riderId: rider.id,
+                      otherName: rider.name,
+                      title: 'Message',
+                      style: styles.messageButton,
+                    })}
                   </View>
                 ))}
               </Card>
@@ -401,6 +548,22 @@ export default function RequestsScreen({
                       } expired`
                     : ''}
                 </Text>
+                {/* A Message button per confirmed passenger until 2 hours
+                    after departure; nothing (not even the row) after. */}
+                {showMessaging && ride.matchedRiders.length > 0 && isMessagingWindowOpen(ride, nowMs) && (
+                  <View style={styles.pastMessageButtons}>
+                    {ride.matchedRiders.map((rider) => (
+                      <View key={rider.id}>
+                        {renderMessageButton({
+                          ride,
+                          riderId: rider.id,
+                          otherName: rider.name,
+                          title: `Message ${rider.name}`,
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                )}
               </Card>
             ))}
           </View>
@@ -434,6 +597,8 @@ export default function RequestsScreen({
         {boardError !== '' && <Notice message={boardError} tone="danger" />}
         {requestNotice !== '' && <Notice message={requestNotice} />}
 
+        {renderMessagesSection()}
+
         {isFirstLoad ? (
           <LoadingState label="Loading requests…" />
         ) : drivers.length === 0 && boardError !== '' ? (
@@ -452,6 +617,52 @@ export default function RequestsScreen({
         )}
       </View>
     </ScrollView>
+  );
+}
+
+// Why a read-only conversation is read-only, by the server's state (the
+// same states ConversationScreen explains in full).
+const READ_ONLY_REASONS = {
+  ride_cancelled: 'Ride cancelled',
+  seat_cancelled: 'Seat cancelled',
+  completed: 'Ride ended',
+};
+
+// One conversation in the Messages list. The other person's name comes
+// from App.js; without it, their role stands in. Read-only is the server's
+// can_send being false (e.g. an archived chat); the row says why, from the
+// server's state, and still opens.
+function ConversationRow({ conversation, onPress }) {
+  const otherRole = conversation.myRole === 'driver' ? 'rider' : 'driver';
+  const name =
+    conversation.otherPersonName || (otherRole === 'rider' ? 'Your rider' : 'Your driver');
+  const isReadOnly = conversation.canSend !== true;
+  const readOnlyReason = READ_ONLY_REASONS[conversation.state] || 'Read-only';
+  const departure = conversation.rideDepartureAt;
+  const rideLine = `Ride to ${conversation.rideDestination}${
+    departure ? ` · ${formatDeparture(departure)}` : ''
+  }`;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Conversation with ${name}, ${rideLine}${
+        isReadOnly ? `, read-only: ${readOnlyReason.toLowerCase()}` : ''
+      }`}
+      style={({ pressed }) => [styles.conversationRow, pressed && styles.conversationRowPressed]}
+    >
+      <Avatar name={name} role={otherRole} uri={conversation.otherPersonAvatarUrl} size={40} />
+      <View style={styles.personText}>
+        <Text style={styles.personName} numberOfLines={1}>
+          {name}
+        </Text>
+        <Text style={styles.personSub} numberOfLines={1}>
+          {rideLine}
+        </Text>
+      </View>
+      {isReadOnly ? <Badge label={readOnlyReason} tone="muted" /> : null}
+      <Ionicons name="chevron-forward" size={18} color={colors.textFaint} style={styles.chevron} />
+    </Pressable>
   );
 }
 
@@ -660,6 +871,45 @@ const styles = createThemedStyles(() => ({
   },
   rateButton: {
     marginTop: spacing.md,
+  },
+  messageButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+  },
+  messageButtonFull: {
+    marginTop: spacing.md,
+  },
+  pastMessageButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  groupLabel: {
+    ...typography.caption,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+  },
+  conversationGroupNext: {
+    marginTop: spacing.md,
+  },
+  conversationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  conversationRowPressed: {
+    backgroundColor: colors.surfaceRaised,
+  },
+  chevron: {
+    marginLeft: spacing.xs,
   },
   reviewedRow: {
     flexDirection: 'row',
